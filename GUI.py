@@ -5,9 +5,9 @@ window = Tk()
 window.geometry("1920x1080")
 window.title("FastQ")
 window.config(background="white")
-icon = PhotoImage(file="FastQ/logo.png")
+icon = PhotoImage(file="logo.png")
 window.iconphoto(True, icon)
-User_icon = PhotoImage(file="FastQ/logo.png").subsample(4,4)
+User_icon = PhotoImage(file="logo.png").subsample(4,4)
 
 
 frame = Frame(window,bg='white',border=2,relief=RIDGE,padx=300)

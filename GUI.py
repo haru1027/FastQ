@@ -80,7 +80,7 @@ def register():
 staff_dashboard_frame = Frame(window)
 staff_dashboard_welcome = Label(staff_dashboard_frame,text='Welcome to FastQ Staff',font=('poppins',20,'bold'),fg='Black',bg='white',image=User_icon,compound='left',padx=20)
 staff_dashboard_welcome.grid()
-
+##
 def staff_dashboard_back():
      staff_dashboard_frame.grid_remove()
      student_frame.grid()

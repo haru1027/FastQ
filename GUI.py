@@ -17,7 +17,7 @@ def init_db():
     """)
     conn.commit()
     conn.close()
-
+init_db()
 
 #Window page
 window = Tk()
@@ -93,6 +93,8 @@ def register():
                     """, (cs, ce, cp))
                     conn.commit()
                     conn.close()
+
+                    
                     
                     messagebox.showinfo("Success!", "Successfully created new account")
                     create__entry.delete(0, END)
@@ -102,6 +104,7 @@ def register():
                     student_frame.grid()
                except sqlite3.IntegrityError:
                     messagebox.showerror("Error", "Student ID already exists!")
+
 
      create_account = Button(regframe, text='Create account',font=('poppins',12),relief=SUNKEN,bd='2',bg='#1f6035',fg='white',command=createaccount)
      create_account.grid(row=7,column=0,pady=(50,20))

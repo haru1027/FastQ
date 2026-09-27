@@ -1,5 +1,24 @@
 from tkinter import * 
 from tkinter import messagebox
+import sqlite3
+
+#DATABASE
+def init_db():
+    conn = sqlite3.connect("fastq.db")
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS students (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            student_id TEXT UNIQUE NOT NULL,
+            first_name TEXT NOT NULL,
+            password_hash TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+
 #Window page
 window = Tk()
 window.geometry("1920x1080")
@@ -43,19 +62,67 @@ def register():
           ce = create__entry.get()
           cs = create_studentid_entry.get()
           cp = create_password_entry.get()
-          if  len(ce and cs and cp) == 0:
+          if not ce or not cs or not cp:
                messagebox.showerror("Error","Please input all needed information!")
+               return
+          if len(ce) < 7:
+               messagebox.showerror("Error", "Please put a valid name!")
+               return
+          if not cs.replace("-", "").isdigit():
+               messagebox.showerror("Error", "Student ID must not contain any letter!")
+               return
+          if not all(CHAR.isdigit() or CHAR == '-' for CHAR in cs):
+               messagebox.showerror("Error", "Student ID must only contain numbers and dashes!")
+               return
+          if len(cs) != 17:
+               messagebox.showerror("Error", "Student ID must be 17 characters!")
+               return
+          
+          elif len(cp) < 8 or not any(CHAR.isupper() for CHAR in cp) or not any(CHAR.islower() for CHAR in cp) or not any(CHAR.isdigit() for CHAR in cp):
+               messagebox.showerror("Error","Password must have 8 characters minimum and have atleast one uppercase, one lowercase, and one digit.")
+               return
+          
           
           else: 
-               messagebox.showinfo("Success!","Successfuly created new account")
+               try:
+                    conn = sqlite3.connect("fastq.db")
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                         INSERT INTO students (student_id, first_name, password_hash)
+                         VALUES (?, ?, ?)
+                    """, (cs, ce, cp))
+                    conn.commit()
+                    conn.close()
+                    
+                    messagebox.showinfo("Success!", "Successfully created new account")
+                    create__entry.delete(0, END)
+                    create_studentid_entry.delete(0, END)
+                    create_password_entry.delete(0, END)
+                    regframe.grid_remove()
+                    student_frame.grid()
+               except sqlite3.IntegrityError:
+                    messagebox.showerror("Error", "Student ID already exists!")
 
      create_account = Button(regframe, text='Create account',font=('poppins',12),relief=SUNKEN,bd='2',bg='#1f6035',fg='white',command=createaccount)
      create_account.grid(row=7,column=0,pady=(50,20))
      regback = Button(regframe, text='Back',font=('poppins',10,'underline'),bg='white',relief=SUNKEN,bd='2',command=back)
      regback.grid(row=9,column=0)
 
+#=============================================================
+#Staff dashboard
+staff_dashboard_frame = Frame(window)
+staff_dashboard_welcome = Label(staff_dashboard_frame,text='Welcome to FastQ Staff',font=('poppins',20,'bold'),fg='Black',bg='white',image=User_icon,compound='left',padx=20)
+staff_dashboard_welcome.grid()
+
+def staff_dashboard_back():
+     staff_dashboard_frame.grid_remove()
+     student_frame.grid()
+
+staff_dashboard_backbtn = Button(staff_dashboard_frame, text='Back',font=('poppins',10,'underline'),bg='white',relief=SUNKEN,bd='2',command=staff_dashboard_back)
+staff_dashboard_backbtn.grid()
+
 #=====================================================================================================================================
-#STUDENT window
+#STUDENT/Main frame
 
 def login():
     usn = username.get()
@@ -103,8 +170,9 @@ staff_option_btn = Button(student_frame, text='Click here',font=('poppins',10,'u
 staff_option_btn.grid(row=7,column=1,padx=(0,80))
 
 #============================================================
-#Staff window
+#Staff log in window
 staffframe = Frame(window,bg='white')
+
 welcome2 = Label(staffframe,text='Welcome to FastQ',font=('poppins',20,'bold'),fg='Black',bg='white',image=User_icon,compound='left',padx=20)
 welcome2.grid(row=0,column=0,columnspan=2)
 
@@ -126,8 +194,8 @@ def stafflogin():
      usn2 = username2.get()
      pw2 = password2.get()
      if usn2 == 'admin' and pw2 == "1234" :
-          
-          messagebox.showinfo('Success','Successfully Logged in!')
+          staffframe.grid_remove()
+          staff_dashboard_frame.grid()
               
      else:
           error2 =  messagebox.showerror("Error", "You entered wrong username or password!")
@@ -145,7 +213,7 @@ login_back.grid(row=7,columnspan=2)
 
    
 #==================================================================================
-#Main dashboard
+#Student dashboard
 dashboard = Frame(window,bg='white',bd=1,relief=RIDGE)
 name = Label(dashboard,text="Hello there, if you see this, your code is working. Placeholder lang, build in-progress.")
 name.grid()
@@ -154,17 +222,6 @@ def backdashboard():
      student_frame.grid()
 back_dashboard = Button(dashboard,text='Back',command=backdashboard,bg='white')
 back_dashboard.grid()
-
-
-
-     
-     
-
-    
-
-
-
-
 
 
 window.mainloop()

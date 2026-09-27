@@ -2,23 +2,6 @@ from tkinter import *
 from tkinter import messagebox
 import sqlite3
 
-#DATABASE
-def init_db():
-    conn = sqlite3.connect("fastq.db")
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS students (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            student_id TEXT UNIQUE NOT NULL,
-            first_name TEXT NOT NULL,
-            password_hash TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    conn.commit()
-    conn.close()
-init_db()
-
 #Window page
 window = Tk()
 window.geometry("1920x1080")
@@ -84,26 +67,7 @@ def register():
           
           
           else: 
-               try:
-                    conn = sqlite3.connect("fastq.db")
-                    cursor = conn.cursor()
-                    cursor.execute("""
-                         INSERT INTO students (student_id, first_name, password_hash)
-                         VALUES (?, ?, ?)
-                    """, (cs, ce, cp))
-                    conn.commit()
-                    conn.close()
-
-                    
-                    
-                    messagebox.showinfo("Success!", "Successfully created new account")
-                    create__entry.delete(0, END)
-                    create_studentid_entry.delete(0, END)
-                    create_password_entry.delete(0, END)
-                    regframe.grid_remove()
-                    student_frame.grid()
-               except sqlite3.IntegrityError:
-                    messagebox.showerror("Error", "Student ID already exists!")
+               messagebox.showinfo('Success!','Successfully Created account')
 
 
      create_account = Button(regframe, text='Create account',font=('poppins',12),relief=SUNKEN,bd='2',bg='#1f6035',fg='white',command=createaccount)

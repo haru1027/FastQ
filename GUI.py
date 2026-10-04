@@ -98,6 +98,20 @@ password_label.grid(row=3,column=0,columnspan=2,padx=(0,240))
 password = Entry(student_frame,font=('poppins', 20),bg='white',show='*')
 password.grid(row=4,column=0,columnspan=2)
 
+isShown = False
+
+def show():
+     global isShown
+     if isShown:
+          password.config(show="*")
+          isShown = False
+     else:
+          password.config(show="")
+          isShown = True
+
+show_password = Button(student_frame,text='show',command=show)
+show_password.grid(row=4,column=3)
+
 login_btn = Button(student_frame,text='Log in',font=('poppins',12),fg = 'white',command=login,bg='#203c3c')
 login_btn.grid(row=5,column=0,columnspan=2,pady=(30,60))
 
@@ -118,6 +132,11 @@ password_label2.grid(row=3,column=0,columnspan=2,padx=(0,240))
 
 password2 = Entry(staff_frame,font=('poppins', 20),bg='white',show='*')
 password2.grid(row=4,column=0,columnspan=2)
+
+#REMOVE IF TAPOS NA
+
+username2.insert(0,'admin')
+password2.insert(0,'1234')
 
 def stafflogin():
      usn2 = username2.get()
@@ -278,7 +297,7 @@ staff_dashboard_backbtn.grid()
 
 
 
-
+print('hello')
 
 #============================================
 #Account registration
@@ -289,30 +308,48 @@ regframe = Frame(window,background='white',padx=300)
 create = Label(regframe,text="Create new account",font=('poppins',20,'bold'),fg='Black',bg='White',image=User_icon,compound='left')
 create.grid(row=0,column=0,columnspan=2,pady=(0,70))
      
-create_name = Label(regframe, text='Name',font=('Poppins',15),bg='white')
-create_name.grid(row=1,column=0,sticky='w',padx=(18,0))
-create__entry = Entry(regframe,font=('poppins',15),bg='white')
-create__entry.grid(row=2,column=0)
+create_firstname = Label(regframe, text='Name',font=('Poppins',15),bg='white')
+create_firstname.grid(row=1,column=0,padx=(18,0),sticky=W)
+create_firstname_entry = Entry(regframe,font=('poppins',15),bg='white')
+create_firstname_entry.grid(row=2,column=0,padx=(0,20))
+
+create_lastname = Label(regframe, text='Last name',font=('Poppins',15),bg='white')
+create_lastname.grid(row=1,column=1,sticky='w',padx=(18,0))
+
+create_lastname_entry = Entry(regframe,font=('poppins',15),bg='white')
+create_lastname_entry.grid(row=2,column=1)
+
+
+
+
+
 create_studentid = Label(regframe, text='Student ID',font=('Poppins',15),bg='white')
-create_studentid.grid(row=3,column=0,sticky='w',padx=(18,0))
+create_studentid.grid(row=3,column=0,padx=(18,0),columnspan=2)
 create_studentid_entry = Entry(regframe,font=('poppins',15))
-create_studentid_entry.grid(row=4,column=0)
+create_studentid_entry.grid(row=4,column=0,columnspan=2)
 create_password = Label(regframe, text='Password',font=('Poppins',15),bg='white')
-create_password.grid(row=5,column=0,sticky='w',padx=(18,0))
+create_password.grid(row=5,column=0,padx=(18,0),columnspan=2)
 create_password_entry = Entry(regframe,font=('poppins',15))
-create_password_entry.grid(row=6,column=0)
+create_password_entry.grid(row=6,column=0,columnspan=2)
 
 def back():
           regframe.grid_remove()
           staff_dashboard_frame.grid()
 def createaccount():
-          ce = create__entry.get()
+          cf = create_firstname_entry.get()
+          cl = create_lastname_entry.get()
           cs = create_studentid_entry.get()
           cp = create_password_entry.get()
-          if not ce or not cs or not cp:
+          if not cf or not cl or not cs or not cp:
                messagebox.showerror("Error","Please input all needed information!")
                return
-          if len(ce) < 7 or any(CHAR.isdigit() for CHAR in ce):
+          if not all(CHAR.isalpha() or CHAR == " " for CHAR in cf):
+               messagebox.showerror("Error", "Only letters and spaces allowed in names!")
+               return
+          if not all(CHAR.isalpha() or CHAR == " " for CHAR in cl):
+               messagebox.showerror("Error", "Only letters and spaces allowed in names!")
+               return
+          #if len(cf) < 7 or any(CHAR.isdigit() for CHAR in cf):
                messagebox.showerror("Error", "Please put a valid name!")
                return
           if not all(CHAR.isdigit() or CHAR == '-' for CHAR in cs):
@@ -339,19 +376,16 @@ def createaccount():
                     conn.close()
                     
                     messagebox.showinfo("Success!", "Successfully created new account")
-                    create__entry.delete(0, END)
-                    create_studentid_entry.delete(0, END)
-                    create_password_entry.delete(0, END)
-                    regframe.grid_remove()
+                    regframe.grid_forget()
                     mainframe.grid()
                except sqlite3.IntegrityError:
                     messagebox.showerror("Error", "Student ID already exists!")
 
 
 create_account = Button(regframe, text='Create account',font=('poppins',12),relief=SUNKEN,bd='2',bg='#203c3c',fg='white',command=createaccount)
-create_account.grid(row=7,column=0,pady=(50,20))
+create_account.grid(row=7,column=0,pady=(50,20),columnspan=2)
 regback = Button(regframe, text='Back',font=('poppins',10,'underline'),bg='white',relief=SUNKEN,bd='2',command=back)
-regback.grid(row=9,column=0)
+regback.grid(row=9,column=0,columnspan=2)
 
 
 

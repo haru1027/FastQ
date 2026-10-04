@@ -29,14 +29,21 @@ text.grid(row=1,columnspan=2,pady=(0,80))
 def redirect_student_frame():
      staff_frame.grid_remove()
      student_frame.grid()
+     student_choice_button.config(bg='#203c3c')
+     staff_choice_button.config(bg="#bfbfbf")
+
+
+     
 def redirect_staff_frame():
      student_frame.grid_remove()
      staff_frame.grid(columnspan=2)
+     staff_choice_button.config(bg='#203c3c')
+     student_choice_button.config(bg="#bfbfbf")
 
 student_choice_button = Button(mainframe, text="I'm a student",font=("Poppins", 15),bg='#203c3c',fg='white',relief=RIDGE,command=redirect_student_frame)
 student_choice_button.grid(row=2,column=0)
 
-staff_choice_button = Button(mainframe, text="I'm a staff",font=("poppins", 15),bg='#a8ffff',fg='black',relief=RIDGE, command=redirect_staff_frame)
+staff_choice_button = Button(mainframe,text="I'm a staff",font=("poppins", 15),bg="#bfbfbf",fg='white',relief=RIDGE, command=redirect_staff_frame)
 staff_choice_button.grid(row=2,column=1)
 
 #=====================================================================================================================================
@@ -92,7 +99,7 @@ def login():
 staff_frame = Frame(mainframe,bg='white')
 
 username_label = Label(staff_frame,text='Staff username',font=('poppins',15),bg='white')
-username_label.grid(row=1,column=0,columnspan=2,sticky=W,padx=(0,210))
+username_label.grid(row=1,column=0,columnspan=2,sticky=W,padx=(0,190))
 
 username2 = Entry(staff_frame,font=('poppins', 20),bg='white')
 username2.grid(row=2,column=0,columnspan=2)
@@ -120,7 +127,7 @@ login_btn2.grid(row=5,column=0,columnspan=2,pady=(30,60))
 
 #==================================================================================
 #student_dashboard
-student_dashboard = Frame(window,bg='white',bd=1,relief=RIDGE)
+student_dashboard = Frame(window,bg='white',bd=1,relief=RIDGE,padx=50,pady=50)
 
 student_dashboard_title = Label(student_dashboard,text='Welcome to FastQ',font=('poppins',30,'bold'),fg='Black',bg='white',compound='left')
 student_dashboard_title.grid(row=0,column=0,columnspan=2,pady=(0,80))
@@ -164,37 +171,39 @@ def payment_frame_back():
     student_dashboard.grid()
 
 
-payment_frame_heading = Label(payment_frame,text="Payment form",font=("poppins", 30,'bold'),bg='white',fg='black')
+payment_frame_heading = Label(payment_frame,text="Payment form",font=("poppins", 20,'bold'),bg='white',fg='black')
 payment_frame_heading.grid(row=0,column=0,columnspan=2,pady=(0,50))
 
-payment_frame_name_label = Label(payment_frame,text='Name ',font=('poppins',15),bg='white')
-payment_frame_name_label.grid(row=1,column=0)
+payment_frame_name_label = Label(payment_frame,text='Name',font=('poppins',15),bg='white')
+payment_frame_name_label.grid(row=1,column=0,columnspan=2)
 
 
 payment_frame_name = Entry(payment_frame,font=("poppins", 20),bg='white',fg='black')
 payment_frame_name.insert(0,"Bryan Keith Bumanlag")
-payment_frame_name.grid(row=1,column=1)
+payment_frame_name.grid(row=2,column=0,columnspan=2)
 
-payment_frame_studentid_label = Label(payment_frame,text='Student ID: ',font=('poppins',15),bg='white')
-payment_frame_studentid_label.grid(row=2,column=0)
+payment_frame_studentid_label = Label(payment_frame,text='Student ID:',font=('poppins',15),bg='white')
+payment_frame_studentid_label.grid(row=3,column=0,columnspan=2)
 
 payment_frame_studentid = Entry(payment_frame,font=("poppins", 20),bg='white',fg='black')
 payment_frame_studentid.insert(0,"03-01-2425-044753")
-payment_frame_studentid.grid(row=2,column=1)
+payment_frame_studentid.grid(row=4,column=0,columnspan=2)
 
 whattopay = Combobox(payment_frame, values=['Tuition Fee', 'Books', 'Miscellaneous'], font=('poppins', 12))
-whattopay.grid(row=3,column=0)
+whattopay.grid(row=5,column=0,columnspan=2)
 
-amounttopay = Entry(payment_frame,font=('poppins', 12),bd=1,relief=RIDGE)
-amounttopay.grid(row=3,column=1)
+amounttopay_pesosign = Label(payment_frame,font=('poppins', 12),text="₱",bg='white')
+amounttopay_pesosign.grid(row=6,column=0,padx=0)
+amounttopay = Entry(payment_frame,font=('poppins', 12),bd=1,relief=SOLID)
+amounttopay.grid(row=6,column=0,columnspan=2)
 
 payment_var = StringVar()
 cash_check = Checkbutton(payment_frame, text="Cash", variable=payment_var, onvalue="cash", offvalue="", font=('poppins', 12), bg='white')
-cash_check.grid(row=4, column=0, padx=50, pady=10)
+cash_check.grid(row=7, column=0, padx=50, pady=10)
 
 # Online checkbox
 online_check = Checkbutton(payment_frame, text="Online Payment", variable=payment_var, onvalue="online", offvalue="", font=('poppins', 12), bg='white')
-online_check.grid(row=4, column=1, padx=50, pady=10)
+online_check.grid(row=7, column=1, padx=50, pady=10)
 
 number = 0
 def get_queue_number():
@@ -204,18 +213,15 @@ def get_queue_number():
     payment_var.get()
     
 
-get_queue_button = Button(payment_frame,text="Get queue number",command=get_queue_number,bg='white',font=('poppins',10))
-get_queue_button.grid(row=5,column=0,columnspan=2)
-
 queue_label = Label(payment_frame,bg='white', text="",font=("poppins", 20),fg='black')
-queue_label.grid(row=6,column=0,columnspan=2)
+queue_label.grid(row=9,column=0,columnspan=2)
+
+get_queue_button = Button(payment_frame,text="Get queue number",command=get_queue_number,bg='#1c282a',font=('poppins',10),fg='white')
+get_queue_button.grid(row=8,column=0,columnspan=2)
 
 
-
-payment_frame_back_button = Button(payment_frame,text="Back",command=payment_frame_back,bg='white',font=('poppins',10))
-payment_frame_back_button.grid(row=7,column=0,columnspan=2)
-
-
+payment_frame_back_button = Button(payment_frame,text="Back",command=payment_frame_back,bg='#ec7d41',font=('poppins',10))
+payment_frame_back_button.grid(row=10,column=0,columnspan=2)
 
 
 ##RECENT TRANSACTIONS FRAME
@@ -235,8 +241,10 @@ recent_transactions2.grid(row=1,column=0,sticky=W,pady=(0,20))
 def backdashboard():
      student_dashboard.grid_remove()
      mainframe.grid()
-back_dashboard = Button(student_dashboard,text='Back',command=backdashboard,bg='white')
+back_dashboard = Button(student_dashboard,text='Back',command=backdashboard,bg='#ec7d41',font=('poppins',10))
 back_dashboard.grid()
+
+
 #=============================================================
 #Staff dashboard
 staff_dashboard_frame = Frame(window,bg='white')
@@ -251,13 +259,14 @@ def staff_dashboard_back():
      staff_dashboard_frame.grid_remove()
      mainframe.grid()
 
-staff_dashboard_backbtn = Button(staff_dashboard_frame, text='Back',font=('poppins',10,'underline'),bg='white',relief=SUNKEN,bd='2',command=staff_dashboard_back)
-staff_dashboard_backbtn.grid()
-
 newuser = Label(staff_dashboard_frame, text="Don't have an account yet?",font=('poppins',10),bg='white')
 newuser.grid(row=6,column=0)
 register_btn = Button(staff_dashboard_frame, text='Register now',font=('poppins',10,'underline'),bg='white',relief=FLAT,command=register)
 register_btn.grid(row=6,column=1,padx=(0,80))
+
+staff_dashboard_backbtn = Button(staff_dashboard_frame, text='Back',font=('poppins',10,'underline'),bg='white',relief=SUNKEN,bd='2',command=staff_dashboard_back)
+staff_dashboard_backbtn.grid()
+
 
 
 

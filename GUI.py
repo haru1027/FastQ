@@ -3,6 +3,23 @@ from tkinter import messagebox
 from tkinter.ttk import Combobox
 
 import sqlite3
+def init_db():
+    conn = sqlite3.connect("fastq.db")
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS students (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            student_id TEXT UNIQUE NOT NULL,
+            first_name TEXT NOT NULL,
+            password_hash TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+init_db() 
+
 
 #Window page
 window = Tk()
@@ -52,12 +69,19 @@ staff_choice_button.grid(row=2,column=1)
 def login():
     usn = username.get()
     pw = password.get()
-    if usn == '03-01-2425-044753' and pw == "1234" :
-         mainframe.grid_forget()
-         student_dashboard.grid()
+
+    conn = sqlite3.connect("fastq.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT password_hash FROM students WHERE student_id = ?", (usn,))
+    result = cursor.fetchone()
+    conn.close()
+
+    if result is not None and result[0] == pw:
+        mainframe.grid_forget()
+        student_dashboard.grid()
     else:
-         error =  messagebox.showerror("Error", "You entered wrong username or password!")
-         password.delete(0,END)
+        messagebox.showerror("Error", "You entered wrong username or password!")
+        password.delete(0, END)
 
 student_frame = Frame(mainframe,bg='white')
 student_frame.grid(columnspan=2)
@@ -85,16 +109,6 @@ password.insert(0,'1234')
      
 #=======================================================================================================================================
 #Staff login frame
-
-def login():
-    usn = username.get()
-    pw = password.get()
-    if usn == '03-01-2425-044753' and pw == "1234" :
-         mainframe.grid_forget()
-         staff_dashboard_frame.grid()
-    else:
-         error =  messagebox.showerror("Error", "You entered wrong username or password!")
-         password.delete(0,END)
 
 staff_frame = Frame(mainframe,bg='white')
 
@@ -318,8 +332,25 @@ def createaccount():
           elif any(CHAR == " " for CHAR in cp):
                messagebox.showerror("Error","Must not include spaces!")
                return   
-          else: 
-               messagebox.showinfo('Success!','Successfully Created account')
+          else:  
+               try:
+                    conn = sqlite3.connect("fastq.db")
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                         INSERT INTO students (student_id, first_name, password_hash)
+                         VALUES (?, ?, ?)
+                    """, (cs, ce, cp))
+                    conn.commit()
+                    conn.close()
+                    
+                    messagebox.showinfo("Success!", "Successfully created new account")
+                    create__entry.delete(0, END)
+                    create_studentid_entry.delete(0, END)
+                    create_password_entry.delete(0, END)
+                    regframe.grid_remove()
+                    mainframe.grid()
+               except sqlite3.IntegrityError:
+                    messagebox.showerror("Error", "Student ID already exists!")
 
 
 create_account = Button(regframe, text='Create account',font=('poppins',12),relief=SUNKEN,bd='2',bg='#203c3c',fg='white',command=createaccount)

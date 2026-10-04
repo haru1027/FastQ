@@ -3,6 +3,7 @@ from tkinter import messagebox
 from tkinter.ttk import Combobox
 
 import sqlite3
+
 def init_db():
     conn = sqlite3.connect("fastq.db")
     cursor = conn.cursor()
@@ -17,7 +18,6 @@ def init_db():
     """)
     conn.commit()
     conn.close()
-
 init_db() 
 
 
@@ -101,11 +101,6 @@ password.grid(row=4,column=0,columnspan=2)
 login_btn = Button(student_frame,text='Log in',font=('poppins',12),fg = 'white',command=login,bg='#203c3c')
 login_btn.grid(row=5,column=0,columnspan=2,pady=(30,60))
 
-#remove this once everything is finisehd
-
-username.insert(0,'03-01-2425-044753')
-password.insert(0,'1234')
-## remove til here ^^^^
      
 #=======================================================================================================================================
 #Staff login frame

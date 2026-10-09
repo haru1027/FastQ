@@ -12,6 +12,7 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             student_id TEXT UNIQUE NOT NULL,
             first_name TEXT NOT NULL,
+            last_name TEXT NOT NULL,
             password_hash TEXT NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
@@ -369,9 +370,9 @@ def createaccount():
                     conn = sqlite3.connect("fastq.db")
                     cursor = conn.cursor()
                     cursor.execute("""
-                         INSERT INTO students (student_id, first_name, password_hash)
-                         VALUES (?, ?, ?)
-                    """, (cs, ce, cp))
+                         INSERT INTO students (student_id, first_name, last_name, password_hash)
+                         VALUES (?, ?, ?, ?)
+                    """, (cs, cf, cl, cp))
                     conn.commit()
                     conn.close()
                     

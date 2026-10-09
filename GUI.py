@@ -1,8 +1,10 @@
 from tkinter import * 
 from tkinter import messagebox
-from tkinter.ttk import Combobox
+from tkinter.ttk import Combobox, Treeview
 
 import sqlite3
+from PIL import Image, ImageTk
+
 
 def init_db():
     conn = sqlite3.connect("fastq.db")
@@ -13,7 +15,7 @@ def init_db():
             student_id TEXT UNIQUE NOT NULL,
             first_name TEXT NOT NULL,
             last_name TEXT NOT NULL,
-            password_hash TEXT NOT NULL,
+            password TEXT NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -33,6 +35,14 @@ User_icon = PhotoImage(file="assets/FastQ Logo.png").subsample(16,16)
 
 window.grid_rowconfigure(0, weight=1)
 window.grid_columnconfigure(0, weight=1)
+
+pic = Image.open("assets/eye_open.jpg")
+pic =  pic.resize((50,50))
+pic2 = Image.open("assets/eye_closed.jpg")
+pic2 =  pic2.resize((50,50))
+
+eye_open = ImageTk.PhotoImage(pic)
+eye_closed = ImageTk.PhotoImage(pic2)
 
 #=======================================================
 #Main frame/Choice frame
@@ -67,19 +77,29 @@ staff_choice_button.grid(row=2,column=1)
 #=====================================================================================================================================
 #Student log in frame
 
+
+
 def login():
     usn = username.get()
     pw = password.get()
 
     conn = sqlite3.connect("fastq.db")
     cursor = conn.cursor()
-    cursor.execute("SELECT password_hash FROM students WHERE student_id = ?", (usn,))
+    cursor.execute("SELECT password FROM students WHERE student_id = ?", (usn,))
     result = cursor.fetchone()
     conn.close()
+
+
+    if result is None:
+        messagebox.showerror("Error", "No such existing student number!")
+        username.delete(0, END)
+        password.delete(0, END)
+        return
 
     if result is not None and result[0] == pw:
         mainframe.grid_forget()
         student_dashboard.grid()
+        welcome_name(usn) 
     else:
         messagebox.showerror("Error", "You entered wrong username or password!")
         password.delete(0, END)
@@ -99,6 +119,9 @@ password_label.grid(row=3,column=0,columnspan=2,padx=(0,240))
 password = Entry(student_frame,font=('poppins', 20),bg='white',show='*')
 password.grid(row=4,column=0,columnspan=2)
 
+username.insert(0, "03-01-2425-044753")
+password.insert(0,"Ab321446")
+
 isShown = False
 
 def show():
@@ -106,11 +129,13 @@ def show():
      if isShown:
           password.config(show="*")
           isShown = False
+          show_password.config(image=eye_closed)
      else:
           password.config(show="")
           isShown = True
+          show_password.config(image=eye_open)
 
-show_password = Button(student_frame,text='show',command=show)
+show_password = Button(student_frame,command=show,image=eye_closed,bg='white',bd=0,relief=GROOVE)
 show_password.grid(row=4,column=3)
 
 login_btn = Button(student_frame,text='Log in',font=('poppins',12),fg = 'white',command=login,bg='#203c3c')
@@ -134,10 +159,30 @@ password_label2.grid(row=3,column=0,columnspan=2,padx=(0,240))
 password2 = Entry(staff_frame,font=('poppins', 20),bg='white',show='*')
 password2.grid(row=4,column=0,columnspan=2)
 
+isShown2 = False
+
+def show2():
+     global isShown2
+     if isShown2:
+          password2.config(show="*")
+          isShown2 = False
+          show_password2.config(image=eye_closed)
+     else:
+          password2.config(show="")
+          isShown2 = True
+          show_password2.config(image=eye_open)
+
+
+
+show_password2 = Button(staff_frame,command=show2,image=eye_closed,bg='white',bd=0,relief=GROOVE)
+show_password2.grid(row=4,column=3)
+
 #REMOVE IF TAPOS NA
 
 username2.insert(0,'admin')
 password2.insert(0,'1234')
+
+##remove til here
 
 def stafflogin():
      usn2 = username2.get()
@@ -155,18 +200,37 @@ login_btn2.grid(row=5,column=0,columnspan=2,pady=(30,60))
 
 
 #==================================================================================
-#student_dashboard
+#student dashboard
 student_dashboard = Frame(window,bg='white',bd=1,relief=RIDGE,padx=50,pady=50)
 
-student_dashboard_title = Label(student_dashboard,text='Welcome to FastQ',font=('poppins',30,'bold'),fg='Black',bg='white',compound='left')
-student_dashboard_title.grid(row=0,column=0,columnspan=2,pady=(0,80))
+student_dashboard_title = Label(student_dashboard,text='FastQ',font=('poppins',30,'bold'),fg='Black',bg='white',image=User_icon,compound='left')
+student_dashboard_title.grid(row=0,column=0,pady=(0,20),sticky=W,columnspan=2)
 ##Name frame
-name_frame = Frame(student_dashboard,relief=FLAT)
+
+name_frame = Frame(student_dashboard,relief=FLAT,bg='white')
 name_frame.grid(row=1,column=0,pady=(0,20),sticky=W)
 
-name = Label(name_frame,text="Welcome, Bryan.",font=('times new roman',20,'italic'),bg='white')
-name.grid(row=0,column=0,sticky=W)
 
+def welcome_name(student_id):
+    
+    conn = sqlite3.connect("fastq.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT first_name FROM students WHERE student_id = ?", (student_id,))
+    result = cursor.fetchone()
+    conn.close()
+    
+    if result:
+        first_name = result[0]
+        name = Label(name_frame,text=f"Welcome, {first_name}.",font=('times new roman',20,'italic'),bg='white')
+        name.grid(row=1,column=0,sticky=W)
+        
+          
+def backdashboard():
+          student_dashboard.grid_remove()
+          mainframe.grid()
+
+back_dashboard = Button(name_frame,text='<--  Back to log in',command=backdashboard,bg='white',fg= "#ec7d41",font=('poppins',10),bd=0,)
+back_dashboard.grid(row=0,column=0,sticky=W)
 
 
 ##balance frame
@@ -176,8 +240,10 @@ balance_frame.grid(row=2,column=0,sticky=W)
 balance_text = Label(balance_frame, text= "CURRENT BALANCE",font=("sans", 10),bg='#203c3c',fg='white')
 balance_text.grid(row=0,column=0,sticky=W,columnspan=2)
 
-balance = Label(balance_frame, text= '₱30,120',font=('Poppins',20),bg='#203c3c',fg='white')
-balance.grid(row=1,column=0,sticky=W,columnspan=2)
+balance = 30,200
+
+balance_label = Label(balance_frame, text= balance ,font=('Poppins',20),bg='#203c3c',fg='white')
+balance_label.grid(row=1,column=0,sticky=W,columnspan=2)
 
 balance_text2 = Label(balance_frame, text= 'After a transaction. amount shall be updated upon the next log-in.',font=("sans", 8),bg='#203c3c',fg='white')
 balance_text2.grid(row=2,column=0,sticky=W,columnspan=2,pady=(0,30))
@@ -227,19 +293,37 @@ amounttopay = Entry(payment_frame,font=('poppins', 12),bd=1,relief=SOLID)
 amounttopay.grid(row=6,column=0,columnspan=2)
 
 payment_var = StringVar()
-cash_check = Checkbutton(payment_frame, text="Cash", variable=payment_var, onvalue="cash", offvalue="", font=('poppins', 12), bg='white')
+cash_check = Checkbutton(payment_frame, text="Cash", variable=payment_var, onvalue="Cash", offvalue="", font=('poppins', 12), bg='white')
 cash_check.grid(row=7, column=0, padx=50, pady=10)
 
 # Online checkbox
-online_check = Checkbutton(payment_frame, text="Online Payment", variable=payment_var, onvalue="online", offvalue="", font=('poppins', 12), bg='white')
+online_check = Checkbutton(payment_frame, text="Online Payment", variable=payment_var, onvalue="Online", offvalue="", font=('poppins', 12), bg='white')
 online_check.grid(row=7, column=1, padx=50, pady=10)
 
-number = 0
+queuenumber = 0
 def get_queue_number():
-    global number
-    number += 1
-    queue_label.config(text=f"Your queue number is #{number} ")
-    payment_var.get()
+    global queuenumber
+
+    name = payment_frame_name.get()
+    student_id = payment_frame_studentid.get()
+    payment_type = whattopay.get()
+    amount = amounttopay.get()
+    payment_method = payment_var.get()
+
+    if not name or not student_id or not payment_type or not amount or not payment_method:
+        messagebox.showerror("Error", "Please fill up all the fields.")
+        return
+    if not amount.replace(",", "").isdigit():
+         messagebox.showerror("Error", "Please input a valid amount.")
+         return
+    else:
+          global queuenumber
+          queuenumber += 1
+          queue_label.config(text=f"Your queue number is #{queuenumber} ")
+
+         
+          
+
     
 
 queue_label = Label(payment_frame,bg='white', text="",font=("poppins", 20),fg='black')
@@ -267,11 +351,7 @@ recent_transactions2.grid(row=1,column=0,sticky=W,pady=(0,20))
 
 
 
-def backdashboard():
-     student_dashboard.grid_remove()
-     mainframe.grid()
-back_dashboard = Button(student_dashboard,text='Back',command=backdashboard,bg='#ec7d41',font=('poppins',10))
-back_dashboard.grid()
+
 
 
 #=============================================================
@@ -288,17 +368,31 @@ def staff_dashboard_back():
      staff_dashboard_frame.grid_remove()
      mainframe.grid()
 
-newuser = Label(staff_dashboard_frame, text="Don't have an account yet?",font=('poppins',10),bg='white')
-newuser.grid(row=6,column=0)
-register_btn = Button(staff_dashboard_frame, text='Register now',font=('poppins',10,'underline'),bg='white',relief=FLAT,command=register)
-register_btn.grid(row=6,column=1,padx=(0,80))
+register_btn = Button(staff_dashboard_frame, text='Register an account',font=('poppins',10,'underline'),bg='white',relief=FLAT,command=register)
+register_btn.grid(row=6,column=0)
 
 staff_dashboard_backbtn = Button(staff_dashboard_frame, text='Back',font=('poppins',10,'underline'),bg='white',relief=SUNKEN,bd='2',command=staff_dashboard_back)
 staff_dashboard_backbtn.grid()
 
+#Queue List
 
 
-print('hello')
+queue_columns = ("Queue #","Name", "Student ID","Payment for","Amount","Mode")
+queue_list = Treeview(staff_dashboard_frame,columns=queue_columns,show='headings')
+
+queue_list.heading("Name", text="Name")
+queue_list.heading("Student ID", text="Student ID")
+queue_list.insert("", END, values=("Queue #","Name", "Student ID","Payment for","Amount","Mode"))
+
+
+
+
+
+scrollbar = Scrollbar(staff_dashboard_frame, orient=VERTICAL, command=queue_list.yview)
+queue_list.config(yscrollcommand=scrollbar.set)
+queue_list.grid(row=1, column=0)
+scrollbar.grid(row=1, column=1, sticky=NS)
+
 
 #============================================
 #Account registration
@@ -370,7 +464,7 @@ def createaccount():
                     conn = sqlite3.connect("fastq.db")
                     cursor = conn.cursor()
                     cursor.execute("""
-                         INSERT INTO students (student_id, first_name, last_name, password_hash)
+                         INSERT INTO students (student_id, first_name, last_name, password)
                          VALUES (?, ?, ?, ?)
                     """, (cs, cf, cl, cp))
                     conn.commit()

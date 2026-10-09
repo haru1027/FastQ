@@ -377,11 +377,16 @@ staff_dashboard_backbtn.grid()
 #Queue List
 
 
-queue_columns = ("Queue #","Name", "Student ID","Payment for","Amount","Mode")
+queue_columns = ("Queue #","Name", "Student ID","Payment for","Amount","Payment method")
 queue_list = Treeview(staff_dashboard_frame,columns=queue_columns,show='headings')
 
+queue_list.heading("Queue #", text="Queue #")
 queue_list.heading("Name", text="Name")
 queue_list.heading("Student ID", text="Student ID")
+queue_list.heading("Payment for", text="Payment for")
+queue_list.heading("Amount", text="Amount")
+queue_list.heading("Payment method", text="Payment method")
+
 queue_list.insert("", END, values=("Queue #","Name", "Student ID","Payment for","Amount","Mode"))
 
 

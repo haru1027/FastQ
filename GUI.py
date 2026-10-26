@@ -7,6 +7,10 @@ from tkcalendar import DateEntry
 
 from datetime import datetime
 
+def fmt_time(t):
+    return datetime.strptime(t, "%Y-%m-%d %H:%M:%S").strftime("%b %d, %Y %I:%M %p") if t else ""
+
+
 # total fees per semester (made-up amounts, change them anytime)
 COURSE_FEES = {
     "BS Information Technology": 28000,
@@ -34,6 +38,125 @@ COURSE_FEES = {
     "BS Secondary Education major in Social Studies": 20000,
     "BS Criminology": 26000,}
 
+# ---------- Fee breakdown (always adds up to the course's grand total) ----------
+MISC_FEES = [("APSCU",20),("AV & Internet",390),("Exam Materials",100),("Insurance Fee",40),
+            ("Materials Fee (SCL)",1250),("Non-Academic Fund",60),("Publication Fee",10),
+            ("School ID",300),("SIS Fee",200),("Student Activity Fund",75),
+            ("Student Manual",50),("Student Organization Fee",30)]
+OTHER_FEES = [("Uniform Fee",2295),("NSTP Fee",1259),("Aircon Fees",703)]
+LAB_FEE = 3600
+LAB_COURSES = {"BS Information Technology","BS Architecture","BS Computer Engineering","BS Civil Engineering",
+            "BS Electrical Engineering","BS Mechanical Engineering","BS Nursing","BS Pharmacy",
+            "BS Medical Laboratory Science","BS Hospitality Management"}
+
+
+def log_action(username, role, action, details=""):
+    conn = sqlite3.connect("fastq.db")
+    cur = conn.cursor()
+    cur.execute("INSERT INTO activity_log (username, role, action, details) VALUES (?,?,?,?)",
+                (username, role, action, details))
+    conn.commit()
+    conn.close()
+
+def get_grand_total(course):
+    conn = sqlite3.connect("fastq.db")
+    cur = conn.cursor()
+    cur.execute("SELECT total_fee FROM courses WHERE course=?", (course,))
+    row = cur.fetchone()
+    conn.close()
+    return row[0] if row else None
+
+def get_breakdown(course):
+    grand = get_grand_total(course)
+    if grand is None:
+        return []
+    conn = sqlite3.connect("fastq.db")
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM fee_items WHERE course=?", (course,))
+    if cur.fetchone()[0] == 0:
+        # first time only: build the list from the amounts above and save it
+        rows = [("Miscellaneous Fees", n, a) for n, a in MISC_FEES]
+        if course in LAB_COURSES:
+            rows.append(("Laboratory Fees", "Fixed Lab Fee", LAB_FEE))
+        rows += [("Other Subject Fees", n, a) for n, a in OTHER_FEES]
+        tuition = grand - sum(r[2] for r in rows)
+        rows = [("Tuition Fee", "Total Tuition Fee", tuition)] + rows
+        for i, (g, n, a) in enumerate(rows):
+            cur.execute("INSERT INTO fee_items (course, grp, name, amount, sort) VALUES (?,?,?,?,?)", (course, g, n, a, i))
+        conn.commit()
+    cur.execute("SELECT grp, name, amount FROM fee_items WHERE course=? ORDER BY sort", (course,))
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+class BreakdownBox(Frame):
+    # "Show breakdown" dropdown: a floating, scrollable box (doesn't stretch the page)
+    def __init__(self, parent, bg='white', fg='black', sub='gray', drop='right'):
+        super().__init__(parent, bg=bg)
+        self.bg, self.fg, self.sub = bg, fg, sub
+        self.drop = drop
+        self.course = None
+        self.is_open = False
+        self.btn = Button(self, text="▼ Show breakdown", font=('poppins',10,'bold'), bg=bg, fg=fg,
+                        activebackground=bg, activeforeground=fg, bd=0, relief=FLAT,
+                        cursor='hand2', anchor=W, command=self.toggle)
+        self.btn.grid(row=0, column=0, sticky=W)
+
+        border = '#c5d0cf' if bg == 'white' else '#3d6360'
+        self.body = Frame(self.winfo_toplevel(), bg=bg, highlightbackground=border, highlightthickness=1)
+        self.canvas = Canvas(self.body, bg=bg, width=300, height=320, highlightthickness=0)
+        self.sb = Scrollbar(self.body, orient=VERTICAL, command=self.canvas.yview)
+        self.canvas.config(yscrollcommand=self.sb.set)
+        self.inner = Frame(self.canvas, bg=bg, padx=6)
+        self.canvas.create_window((0,0), window=self.inner, anchor=NW)
+        self.inner.bind("<Configure>", lambda e: self.canvas.config(scrollregion=self.canvas.bbox("all")))
+        self.canvas.pack(side=LEFT, fill=BOTH, expand=True)
+        self.sb.pack(side=RIGHT, fill=Y)
+        self.canvas.bind("<MouseWheel>", self.wheel)
+
+    def wheel(self, e):
+        self.canvas.yview_scroll(int(-e.delta/120), "units")
+
+    def toggle(self):
+        self.is_open = not self.is_open
+        self.draw()
+
+    def set_course(self, course):
+        self.course = course
+        self.draw()
+
+    def draw(self):
+        for w in self.inner.winfo_children():
+            w.destroy()
+        if not self.is_open:
+            self.body.place_forget()
+            self.btn.config(text="▼ Show breakdown")
+            return
+        self.btn.config(text="▲ Hide breakdown")
+        rows = get_breakdown(self.course)
+        if not rows:
+            Label(self.inner, text="No course set", font=('poppins',9), bg=self.bg, fg=self.sub).grid(row=0, column=0)
+        r, last, total = 0, None, 0
+        for group, name, amt in rows:
+            if group != last:
+                Label(self.inner, text=group, font=('poppins',9,'bold'), bg=self.bg, fg=self.fg).grid(row=r, column=0, columnspan=2, sticky=W, pady=(6,0))
+                r += 1
+                last = group
+            Label(self.inner, text=name, font=('poppins',9), bg=self.bg, fg=self.sub).grid(row=r, column=0, sticky=W, padx=(10,20))
+            Label(self.inner, text=f"₱{amt:,.2f}", font=('poppins',9), bg=self.bg, fg=self.sub).grid(row=r, column=1, sticky=E)
+            total += amt
+            r += 1
+        if rows:
+            Label(self.inner, text="GRAND TOTAL", font=('poppins',9,'bold'), bg=self.bg, fg=self.fg).grid(row=r, column=0, sticky=W, pady=(8,0))
+            Label(self.inner, text=f"₱{total:,.2f}", font=('poppins',9,'bold'), bg=self.bg, fg=self.fg).grid(row=r, column=1, sticky=E, pady=(8,0))
+        for w in self.inner.winfo_children():
+            w.bind("<MouseWheel>", self.wheel)
+        x = 0 if self.drop == 'right' else self.winfo_width() - 322
+        self.body.place(in_=self, x=x, y=self.btn.winfo_reqheight()+4)
+        self.body.lift()
+        self.canvas.yview_moveto(0)
+
+        
 def init_db():
     conn = sqlite3.connect("fastq.db")
     cursor = conn.cursor()
@@ -50,6 +173,10 @@ def init_db():
         CREATE TABLE IF NOT EXISTS courses (
             course TEXT PRIMARY KEY,
             total_fee REAL NOT NULL)""")
+    try:
+        cursor.execute("ALTER TABLE queue ADD COLUMN paid_at TIMESTAMP")
+    except sqlite3.OperationalError:
+        pass
     for course_name, fee in COURSE_FEES.items():
         cursor.execute("INSERT OR IGNORE INTO courses (course, total_fee) VALUES (?, ?)", (course_name, fee))
     cursor.execute("""
@@ -82,6 +209,29 @@ def init_db():
         pass
     cursor.execute("INSERT OR IGNORE INTO staff (username, password, role) VALUES ('admin', '1234', 'admin')")
     cursor.execute("UPDATE staff SET role='admin' WHERE username='admin'")
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS fee_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            course TEXT NOT NULL,
+            grp TEXT NOT NULL,
+            name TEXT NOT NULL,
+            amount REAL NOT NULL,
+            sort INTEGER NOT NULL,
+            UNIQUE(course, name))""")
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS activity_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL,
+            role TEXT NOT NULL,
+            action TEXT NOT NULL,
+            details TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
+    try:
+        cursor.execute("ALTER TABLE queue ADD COLUMN receipt_no TEXT")
+    except sqlite3.OperationalError:
+        pass
+    # Give old paid entries a receipt number too.
+    cursor.execute("UPDATE queue SET receipt_no='OR-'||printf('%06d', id) WHERE status='Paid' AND receipt_no IS NULL")
     conn.commit()
     conn.close()
 init_db()
@@ -208,6 +358,7 @@ def stafflogin():
     if found:
         current_staff = usn
         current_role = found[0]
+        log_action(usn, current_role, "LOGIN", "Logged in")
         if current_role == "admin":
             admin_tab.pack(side=LEFT,padx=(0,6))   # show the Admin tab
         else:
@@ -226,136 +377,6 @@ def stafflogin():
 login_btn2 = Button(login_frame,text='Log in',font=('poppins',12,'bold'),fg='black',bg='#f59a23',activebackground='#e08a15',relief=FLAT,command=lambda: do_login())
 login_btn2.grid(row=6,column=0,sticky=EW,pady=(28,0),ipady=6)
 #=======================================================================================================================================
-#Create account frame
-create_frame = Frame(right_panel,bg='white',padx=40,pady=40,highlightbackground='#dfe6e5',highlightthickness=1)
-create_frame.grid_columnconfigure(0,minsize=380)
-
-isShown3 = False
-
-def show3():
-    global isShown3
-    if isShown3:
-        new_password.config(show="*")
-        confirm_password.config(show="*")
-        isShown3 = False
-        show_password3.config(image=eye_closed)
-    else:
-        new_password.config(show="")
-        confirm_password.config(show="")
-        isShown3 = True
-        show_password3.config(image=eye_open)
-
-create_title = Label(create_frame,text='Create account',font=('poppins',22,'bold'),fg='black',bg='white')
-create_title.grid(row=0,column=0,sticky=W)
-
-create_subtitle = Label(create_frame,text='Set up a new staff account',font=('poppins',10),fg='gray',bg='white')
-create_subtitle.grid(row=1,column=0,sticky=W,pady=(4,25))
-
-new_username_label = Label(create_frame,text='Username',font=('poppins',10),fg='gray',bg='white')
-new_username_label.grid(row=2,column=0,sticky=W)
-
-new_user_box = Frame(create_frame,bg='white',highlightbackground='#c5d0cf',highlightthickness=1)
-new_user_box.grid(row=3,column=0,sticky=EW,pady=(4,0))
-new_username = Entry(new_user_box,font=('poppins',12),bg='white',relief=FLAT,bd=0)
-new_username.pack(fill=X,padx=10,ipady=8)
-
-new_password_label = Label(create_frame,text='Password',font=('poppins',10),fg='gray',bg='white')
-new_password_label.grid(row=4,column=0,sticky=W,pady=(18,0))
-
-new_pw_box = Frame(create_frame,bg='white',highlightbackground='#c5d0cf',highlightthickness=1)
-new_pw_box.grid(row=5,column=0,sticky=EW,pady=(4,0))
-new_pw_box.grid_columnconfigure(0,weight=1)
-new_password = Entry(new_pw_box,font=('poppins',12),bg='white',relief=FLAT,bd=0,show='*')
-new_password.grid(row=0,column=0,sticky=EW,padx=10,ipady=8)
-
-show_password3 = Button(new_pw_box,command=show3,image=eye_closed,bg='white',activebackground='white',bd=0,relief=FLAT)
-show_password3.grid(row=0,column=1,padx=(0,8))
-
-confirm_password_label = Label(create_frame,text='Confirm password',font=('poppins',10),fg='gray',bg='white')
-confirm_password_label.grid(row=6,column=0,sticky=W,pady=(18,0))
-
-confirm_box = Frame(create_frame,bg='white',highlightbackground='#c5d0cf',highlightthickness=1)
-confirm_box.grid(row=7,column=0,sticky=EW,pady=(4,0))
-confirm_box.grid_columnconfigure(0,weight=1)
-confirm_password = Entry(confirm_box,font=('poppins',12),bg='white',relief=FLAT,bd=0,show='*')
-confirm_password.grid(row=0,column=0,sticky=EW,padx=10,ipady=8)
-
-create_hint = Label(create_frame,text='Password: 8+ characters with an uppercase letter,\na lowercase letter, and a number.',font=('poppins',9),fg='gray',bg='white',justify=LEFT)
-create_hint.grid(row=8,column=0,sticky=W,pady=(8,0))
-
-def back_to_login():
-    create_frame.grid_forget()
-    login_frame.grid(row=0,column=0)
-
-def save_account():
-    usn = new_username.get().strip()
-    pw = new_password.get()
-    cpw = confirm_password.get()
-
-    if not usn or not pw or not cpw:
-        messagebox.showerror("Error", "Please input all needed information!")
-        return
-
-    if not all(CHAR.isalnum() or CHAR == "_" for CHAR in usn):
-        messagebox.showerror("Error", "Username can only have letters, numbers, and underscores!")
-        return
-    if sum(c.isalpha() for c in usn) < 4:
-        messagebox.showerror("Error", "Username must have at least 4 letters!")
-        return
-    if any(CHAR == " " for CHAR in pw):
-        messagebox.showerror("Error", "Password must not include spaces!")
-        return
-    if len(pw) < 8 or not any(CHAR.isupper() for CHAR in pw) or not any(CHAR.islower() for CHAR in pw) or not any(CHAR.isdigit() for CHAR in pw):
-        messagebox.showerror("Error", "Password must have 8 characters minimum and have at least one uppercase, one lowercase, and one digit.")
-        return
-
-    if pw != cpw:
-        messagebox.showerror("Error", "Passwords do not match!")
-        confirm_password.delete(0,END)
-        return
-
-    conn = sqlite3.connect("fastq.db")
-    cur = conn.cursor()
-    try:
-        cur.execute('INSERT INTO staff (username, password) VALUES (?, ?)', (usn, pw))
-        conn.commit()
-    except sqlite3.IntegrityError:
-        messagebox.showerror("Error", "That username is already taken!")
-        return
-    finally:
-        conn.close()
-
-    messagebox.showinfo("Success", "Account created! You can now log in.")
-    new_username.delete(0,END)
-    new_password.delete(0,END)
-    confirm_password.delete(0,END)
-    back_to_login()
-
-create_btn = Button(create_frame,text='Create account',font=('poppins',12,'bold'),fg='black',bg='#f59a23',activebackground='#e08a15',relief=FLAT,command=save_account)
-create_btn.grid(row=9,column=0,sticky=EW,pady=(24,0),ipady=6)
-
-back_row = Frame(create_frame,bg='white')
-back_row.grid(row=10,column=0,pady=(22,0))
-
-back_label = Label(back_row,text='Already have an account?',font=('poppins',10),fg='gray',bg='white')
-back_label.grid(row=0,column=0)
-
-back_button = Button(back_row,text='Back to log in',font=('poppins',10,'bold','underline'),fg='gray',bg='white',activebackground='white',bd=0,command=back_to_login)
-back_button.grid(row=0,column=1,padx=(6,0))
-#=======================================================================================================================================
-#Button on the log in page
-def create_newaccount():
-    login_frame.grid_remove()   # hide the log in page
-    create_frame.grid(row=0,column=0)   # show the create account page
-
-signup_row = Frame(login_frame,bg='white')
-signup_row.grid(row=7,column=0,pady=(22,0))
-
-create_newaccount_label = Label(signup_row,text="Don't have an account yet?",font=('poppins',10),fg='gray',bg='white')
-create_newaccount_label.grid(row=0,column=0)
-
-create_newaccount_button = Button(signup_row,text='Create a new account',font=('poppins',10,'bold','underline'),fg='gray',bg='white',activebackground='white',bd=0,command=create_newaccount)
-create_newaccount_button.grid(row=0,column=1,padx=(6,0))
 
 #---------- Staff / Student switch on the login card ----------
 login_mode = "staff"
@@ -374,13 +395,15 @@ def set_login_mode(mode):
         login_subtitle.config(text='Log in to your staff account')
         staff_mode_btn.config(bg='#f59a23')
         student_mode_btn.config(bg='white')
-        signup_row.grid()
+        username.insert(0,'admin')
+        password.insert(0,'1234')
     else:
         username_label.config(text='Student ID')
         login_subtitle.config(text='Log in to your student account')
         student_mode_btn.config(bg='#f59a23')
         staff_mode_btn.config(bg='white')
-        signup_row.grid_remove()   # students can't make accounts
+        username.insert(0,'03-01-2425-044753')
+        password.insert(0,'Ab321446')
 
 staff_mode_btn = Button(mode_row,text='Staff',font=('poppins',9,'bold'),bg='#f59a23',fg='black',relief=GROOVE,padx=12,command=lambda: set_login_mode('staff'))
 staff_mode_btn.pack(side=LEFT,fill=X,expand=True)
@@ -403,6 +426,7 @@ def studentlogin():
         password.delete(0,END)
         return
     current_student = sid
+    log_action(sid, "student", "LOGIN", "Logged in")
     student_welcome.config(text=f'Welcome, {found[0]}!')
     reset_payment_form()
     refresh_student_page()
@@ -424,6 +448,7 @@ staff_dashboard_frame.grid_columnconfigure(0,weight=1)
 staff_dashboard_frame.grid_rowconfigure(1,weight=1)
 
 def staff_dashboard_back():
+    log_action(current_staff, current_role, "LOGOUT", "Logged out")
     # Log out
     staff_dashboard_frame.grid_remove()
     window.config(background="white")
@@ -546,7 +571,7 @@ clear_filters_btn.grid(row=1,column=6)
 
 
 #The table (it grows to fill the screen)
-queue_columns = ("Entry #","Name", "Student ID","Payment for","Amount","Payment method","Status","Created at")
+queue_columns = ("Entry #","Name", "Student ID","Payment for","Amount","Payment method","Status","Created at","Paid at","Receipt #")
 
 style = Style()
 style.theme_use('clam')
@@ -558,18 +583,23 @@ queue_list = Treeview(queue_list_dashboard,columns=queue_columns,show='headings'
 queue_list.grid(row=1,column=0,sticky=NSEW)
 
 column_settings = [
-    ("Entry #", 70, CENTER),
-    ("Name", 220, W),
-    ("Student ID", 190, CENTER),
-    ("Payment for", 300, W),
-    ("Amount", 120, E),
-    ("Payment method", 130, CENTER),
-    ("Status", 100, CENTER),
-    ("Created at", 200, CENTER),]
-    
+    ("Entry #", 60, CENTER),
+    ("Name", 170, W),
+    ("Student ID", 150, CENTER),
+    ("Payment for", 200, W),
+    ("Amount", 100, E),
+    ("Payment method", 120, CENTER),
+    ("Status", 70, CENTER),
+    ("Created at", 165, CENTER),
+    ("Paid at", 165, CENTER),
+    ("Receipt #", 120, CENTER),]
+
 for col_name, col_width, col_anchor in column_settings:
     queue_list.heading(col_name, text=col_name)
-    queue_list.column(col_name, width=col_width, anchor=col_anchor)
+    if col_name == "Payment for":
+        queue_list.column(col_name, width=col_width, anchor=col_anchor, minwidth=140, stretch=True)    # this one can grow
+    else:
+        queue_list.column(col_name, width=col_width, anchor=col_anchor, minwidth=col_width, stretch=False)   # these stay fixed
 
 queue_list.tag_configure('paid', background='#eaf6ef')   # paid rows turn light green
 
@@ -606,7 +636,7 @@ def load_queue():
         queue_list.delete(row)
 
     query = """SELECT id, name, student_id, payment_for, amount, payment_method, status,
-                    datetime(created_at, 'localtime')
+                    datetime(created_at, 'localtime'), datetime(paid_at, 'localtime'), receipt_no
             FROM queue WHERE 1=1"""
     params = []
 
@@ -623,7 +653,7 @@ def load_queue():
     if queue_date_entry.get().strip():
         query += " AND date(created_at,'localtime') = ?"
         params.append(queue_date_entry.get().strip())
-    query += " ORDER BY id"
+    query += " ORDER BY id DESC"
 
     conn = sqlite3.connect("fastq.db")
     cur = conn.cursor()
@@ -632,13 +662,68 @@ def load_queue():
     conn.close()
 
     for r in rows:
-        if r[7]:
-            time_text = datetime.strptime(r[7], "%Y-%m-%d %H:%M:%S").strftime("%b %d, %Y %I:%M %p")
-        else:
-            time_text = ""
         tag = 'paid' if r[6] == 'Paid' else ''
-        queue_list.insert("", END, values=(r[0], r[1], r[2], r[3], f"₱{r[4]:,.2f}", r[5], r[6], time_text), tags=(tag,))
+        queue_list.insert("", END, values=(r[0], r[1], r[2], r[3], f"₱{r[4]:,.2f}", r[5], r[6], fmt_time(r[7]), fmt_time(r[8]), r[9] or "-"), tags=(tag,))
 
+
+
+def show_receipt(queue_id):
+    conn = sqlite3.connect("fastq.db")
+    cur = conn.cursor()
+    cur.execute("""SELECT receipt_no, student_id, name, payment_for, amount, payment_method,
+                          COALESCE(staff,'-'), datetime(paid_at,'localtime')
+                   FROM queue WHERE id=? AND status='Paid'""", (queue_id,))
+    row = cur.fetchone()
+    conn.close()
+    if row is None:
+        messagebox.showerror("Error", "No receipt yet. The payment has to be marked as paid first.")
+        return
+
+    info = get_student_info(row[1])
+    course = info[2] if info else "-"
+
+    lines = [
+        "=" * 42,
+        "PHINMA UPang - FINANCE OFFICE".center(42),
+        "OFFICIAL RECEIPT".center(42),
+        "=" * 42,
+        f"Receipt No.:  {row[0]}",
+        f"Date:         {fmt_time(row[7])}",
+        f"Student:      {row[2]}",
+        f"Student ID:   {row[1]}",
+        f"Course:       {course}",
+        f"For:          {row[3]}",
+        f"Amount:       ₱{row[4]:,.2f}",
+        f"Method:       {row[5]}",
+        f"Received by:  {row[6]}",
+        "=" * 42,
+        "Thank you for your payment!".center(42),
+        "=" * 42,
+    ]
+
+    win = Toplevel(window)
+    win.title(f"Receipt {row[0]}")
+    win.config(bg='white')
+    win.resizable(False, False)
+    Label(win, text="\n".join(lines), font=('Courier New', 11), bg='white', justify=LEFT).pack(padx=30, pady=(20,10))
+    Button(win, text='Close', font=('poppins',10,'bold'), bg='#f59a23', fg='black', activebackground='#e08a15',
+           relief=FLAT, padx=20, pady=4, command=win.destroy).pack(pady=(0,20))
+
+
+def view_selected_receipt():
+    selected = queue_list.selection()
+    if not selected:
+        messagebox.showerror("Error", "Please select an entry in the queue list first.")
+        return
+    show_receipt(queue_list.item(selected[0])['values'][0])
+
+
+def view_my_receipt():
+    selected = my_list.selection()
+    if not selected:
+        messagebox.showerror("Error", "Please select a payment in the list first.")
+        return
+    show_receipt(my_list.item(selected[0])['values'][0])
 
 
 def mark_as_paid():
@@ -647,7 +732,6 @@ def mark_as_paid():
     if not selected:
         messagebox.showerror("Error", "Please select an entry in the queue list first.")
         return
-
     values = queue_list.item(selected[0])['values']
     entry_number = values[0]
     status = values[6]
@@ -656,18 +740,88 @@ def mark_as_paid():
         messagebox.showinfo("Info", "This entry is already paid.")
         return
 
+    # ask first before doing anything
+    if not messagebox.askyesno("Confirm payment", f"Mark entry #{entry_number} ({values[1]}) as paid?\nAmount: {values[4]}"):
+        return
+
     conn = sqlite3.connect("fastq.db")
     cur = conn.cursor()
-    cur.execute("UPDATE queue SET status='Paid', staff=? WHERE id=?", (current_staff, entry_number))
+    cur.execute("UPDATE queue SET status='Paid', staff=?, paid_at=CURRENT_TIMESTAMP, receipt_no=? WHERE id=?",
+                (current_staff, f"OR-{int(entry_number):06d}", entry_number))
     conn.commit()
     conn.close()
+
+    log_action(current_staff, current_role, "MARK PAID", f"Entry #{entry_number}, {values[1]}, {values[4]}")
 
     load_queue()  
     if shown_student_id:
         show_student(shown_student_id)   # refresh the balance on screen
 
+    messagebox.showinfo("Success", f"Entry #{entry_number} was marked as paid!")
+
+def undo_paid():
+    selected = queue_list.selection()
+
+    if not selected:
+        messagebox.showerror("Error", "Please select an entry in the queue list first.")
+        return
+    values = queue_list.item(selected[0])['values']
+    entry_number = values[0]
+    status = values[6]
+
+    if status != "Paid":
+        messagebox.showerror("Error", "Only paid entries can be changed back to waiting.")
+        return
+
+    if not messagebox.askyesno("Undo payment", f"Change entry #{entry_number} ({values[1]}) back to Waiting?"):
+        return
+
+    conn = sqlite3.connect("fastq.db")
+    cur = conn.cursor()
+    cur.execute("UPDATE queue SET status='Waiting', paid_at=NULL, receipt_no=NULL WHERE id=?", (entry_number,))
+    conn.commit()
+    conn.close()
+    log_action(current_staff, current_role, "UNDO PAID", f"Entry #{entry_number}, {values[1]}")
+    load_queue()
+    if shown_student_id:
+        show_student(shown_student_id)   # balance goes back up
+
+    messagebox.showinfo("Success", f"Entry #{entry_number} is back to Waiting.")
+
+
 mark_paid_button = Button(filter_bar,text="Mark as paid",font=('poppins',10,'bold'),fg='white',bg='#1f7a4d',activebackground='#186340',activeforeground='white',relief=FLAT,padx=18,pady=6,command=mark_as_paid)
 mark_paid_button.grid(row=1,column=7)
+
+def cancel_entry():
+    selected = queue_list.selection()
+    if not selected:
+        messagebox.showerror("Error", "Please select an entry in the queue list first.")
+        return
+    values = queue_list.item(selected[0])['values']
+    if values[6] != "Waiting":
+        messagebox.showerror("Error", "Only entries that are still waiting can be cancelled.")
+        return
+    if not messagebox.askyesno("Cancel entry", f"Cancel and delete queue entry #{values[0]}?"):
+        return
+    conn = sqlite3.connect("fastq.db")
+    cur = conn.cursor()
+    cur.execute("DELETE FROM queue WHERE id=?", (values[0],))
+    conn.commit()
+    conn.close()
+    log_action(current_staff, current_role, "CANCEL ENTRY", f"Entry #{values[0]}, {values[1]}, {values[4]}")
+    load_queue()
+    if shown_student_id:
+        show_student(shown_student_id)
+
+cancel_button = Button(filter_bar,text="Cancel entry",font=('poppins',10,'bold'),fg='white',bg='#c0392b',activebackground='#a93226',activeforeground='white',relief=FLAT,padx=18,pady=6,command=cancel_entry)
+cancel_button.grid(row=1,column=8,padx=(8,0))
+
+undo_button = Button(filter_bar,text="Undo paid",font=('poppins',10,'bold'),fg='white',bg='#7f8c8d',activebackground='#6c7a7b',activeforeground='white',relief=FLAT,padx=18,pady=6,command=undo_paid)
+undo_button.grid(row=1,column=9,padx=(8,0))
+
+receipt_button = Button(filter_bar,text="View receipt",font=('poppins',10,'bold'),fg='white',bg='#2c6e9b',activebackground='#245a80',activeforeground='white',relief=FLAT,padx=18,pady=6,command=view_selected_receipt)
+receipt_button.grid(row=1,column=10,padx=(8,0))
+queue_list.bind("<Double-1>", lambda e: view_selected_receipt())
 
 #================================================================================================================================
 #STUDENT FINDER PAGE
@@ -864,7 +1018,7 @@ create_course.grid(row=6,column=0,columnspan=2,sticky=W,pady=(18,0))
 create_course_combo = Combobox(regframe,values=course_list,font=('poppins',12),state='readonly')
 create_course_combo.grid(row=7,column=0,columnspan=2,sticky=EW,pady=(4,0),ipady=6)
 
-create_pw = Label(regframe,text="Student's password (tell this to the student)",font=('poppins',10),fg='gray',bg='white')
+create_pw = Label(regframe,text="Student's password",font=('poppins',10),fg='gray',bg='white')
 create_pw.grid(row=8,column=0,columnspan=2,sticky=W,pady=(18,0))
 create_pw_entry = make_entry(9,0,span=2)
 
@@ -919,7 +1073,7 @@ def createaccount():
             return
         finally:
             conn.close()
-
+        log_action(current_staff, current_role, "REGISTER STUDENT", f"{cs}, {cf} {cl}, {cc}")
         messagebox.showinfo("Success!", "Successfully registered the student")
         back()
 
@@ -960,13 +1114,16 @@ def show_staff_sub():
     admin_queue_page.grid_remove()
     admin_fees_page.grid_remove()
     admin_students_page.grid_remove()
+    admin_log_page.grid_remove()
     admin_staff_page.grid(row=0,column=0,sticky=NSEW,padx=32,pady=(12,28))
     load_staff()
+
 
 def show_queues_sub():
     admin_staff_page.grid_remove()
     admin_fees_page.grid_remove()
     admin_students_page.grid_remove()
+    admin_log_page.grid_remove()
     admin_queue_page.grid(row=0,column=0,sticky=NSEW,padx=32,pady=(12,28))
     # put all the staff names in the Staff filter
     conn = sqlite3.connect("fastq.db")
@@ -983,6 +1140,7 @@ def show_fees_sub():
     admin_staff_page.grid_remove()
     admin_queue_page.grid_remove()
     admin_students_page.grid_remove()
+    admin_log_page.grid_remove()
     admin_fees_page.grid(row=0,column=0,sticky=NSEW,padx=32,pady=(12,28))
     load_fees()
 
@@ -990,6 +1148,7 @@ def show_students_sub():
     admin_staff_page.grid_remove()
     admin_queue_page.grid_remove()
     admin_fees_page.grid_remove()
+    admin_log_page.grid_remove()
     admin_students_page.grid(row=0,column=0,sticky=NSEW,padx=32,pady=(12,28))
     load_students()
 
@@ -1062,10 +1221,12 @@ def add_staff_account():
         return
     finally:
         conn.close()
+    log_action(current_staff, current_role, "ADD STAFF", f"{usn} ({role})")
     admin_new_user.delete(0,END)
     admin_new_pw.delete(0,END)
     admin_new_role.set("staff")
     load_staff()
+
 
 def reset_staff_password():
     selected = staff_table.selection()
@@ -1085,6 +1246,7 @@ def reset_staff_password():
     cur.execute("UPDATE staff SET password=? WHERE username=?",(pw,usn))
     conn.commit()
     conn.close()
+    log_action(current_staff, current_role, "RESET PASSWORD", f"For {usn}")
     admin_new_pw.delete(0,END)
     messagebox.showinfo("Done",f"Password for {usn} was changed.")
 
@@ -1107,6 +1269,7 @@ def remove_staff_account():
     cur.execute("DELETE FROM staff WHERE username=?",(usn,))
     conn.commit()
     conn.close()
+    log_action(current_staff, current_role, "REMOVE STAFF", f"Removed {usn}")
     load_staff()
 
 staff_form = Frame(admin_staff_page,bg='white')
@@ -1139,7 +1302,7 @@ remove_staff_btn.grid(row=1,column=5)
 admin_queue_page.grid_rowconfigure(2,weight=1)
 Label(admin_queue_page,text='All queues',font=('poppins',15,'bold'),bg='white').grid(row=0,column=0,sticky=W,pady=(0,10))
 
-aq_columns = ("Entry #","Staff","Name","Student ID","Payment for","Amount","Method","Status","Created at")
+aq_columns = ("Entry #","Staff","Name","Student ID","Payment for","Amount","Method","Status","Created at","Paid at")
 aq_table = Treeview(admin_queue_page,columns=aq_columns,show='headings',height=10)
 aq_table.grid(row=2,column=0,sticky=NSEW)
 
@@ -1152,7 +1315,8 @@ aq_column_settings = [
     ("Amount",110,E),
     ("Method",90,CENTER),
     ("Status",90,CENTER),
-    ("Created at",190,CENTER),]
+    ("Created at",190,CENTER),
+    ("Paid at",190,CENTER),]
 for col_name, col_width, col_anchor in aq_column_settings:
     aq_table.heading(col_name, text=col_name)
     aq_table.column(col_name, width=col_width, anchor=col_anchor)
@@ -1168,7 +1332,7 @@ def load_all_queue():
         aq_table.delete(row)
     query = """SELECT id, COALESCE(staff,'-'), name, student_id,
                   payment_for, amount, payment_method, status,
-                  datetime(created_at,'localtime')
+                  datetime(created_at,'localtime'), datetime(paid_at,'localtime')
            FROM queue WHERE 1=1"""
 
     params = []
@@ -1188,19 +1352,15 @@ def load_all_queue():
     if aq_date.get().strip():
         query += " AND date(created_at,'localtime') = ?"
         params.append(aq_date.get().strip())
-    query += " ORDER BY id"
+    query += " ORDER BY id DESC"
     conn = sqlite3.connect("fastq.db")
     cur = conn.cursor()
     cur.execute(query,params)
     rows = cur.fetchall()
     conn.close()
     for r in rows:
-        if r[8]:
-            time_text = datetime.strptime(r[8],"%Y-%m-%d %H:%M:%S").strftime("%b %d, %Y %I:%M %p")
-        else:
-            time_text = ""
         tag = 'paid' if r[7] == 'Paid' else ''
-        aq_table.insert("",END,values=(r[0],r[1],r[2],r[3],r[4],f"₱{r[5]:,.2f}",r[6],r[7],time_text),tags=(tag,))
+        aq_table.insert("",END,values=(r[0],r[1],r[2],r[3],r[4],f"₱{r[5]:,.2f}",r[6],r[7],fmt_time(r[8]),fmt_time(r[9])),tags=(tag,))
 
 def clear_aq_filters():
     aq_search.delete(0,END)
@@ -1261,6 +1421,101 @@ fees_scrollbar = Scrollbar(admin_fees_page,orient=VERTICAL,command=fees_table.yv
 fees_table.config(yscrollcommand=fees_scrollbar.set)
 fees_scrollbar.grid(row=1,column=1,sticky=NS)
 
+class EditableBreakdown(Frame):
+    # a panel with one box per fee, so the admin can type new amounts
+    def __init__(self, parent):
+        super().__init__(parent, bg='white', highlightbackground='#c5d0cf', highlightthickness=1)
+        self.course = None
+        self.boxes = []
+        Label(self, text='Fee breakdown', font=('poppins',12,'bold'), bg='white').pack(anchor=W, padx=12, pady=(10,0))
+        self.course_label = Label(self, text='Pick a course from the list', font=('poppins',9), bg='white', fg='gray', wraplength=340, justify=LEFT)
+        self.course_label.pack(anchor=W, padx=12, pady=(0,6))
+        mid = Frame(self, bg='white')
+        mid.pack(fill=BOTH, expand=True, padx=(12,0))
+        self.canvas = Canvas(mid, bg='white', width=360, height=200, highlightthickness=0)
+        sb = Scrollbar(mid, orient=VERTICAL, command=self.canvas.yview)
+        self.canvas.config(yscrollcommand=sb.set)
+        self.inner = Frame(self.canvas, bg='white')
+        self.canvas.create_window((0,0), window=self.inner, anchor=NW)
+        self.inner.bind("<Configure>", lambda e: self.canvas.config(scrollregion=self.canvas.bbox("all")))
+        self.canvas.pack(side=LEFT, fill=BOTH, expand=True)
+        sb.pack(side=RIGHT, fill=Y)
+        self.canvas.bind("<MouseWheel>", self.wheel)
+        bottom = Frame(self, bg='white')
+        bottom.pack(fill=X, padx=12, pady=10)
+        bottom.grid_columnconfigure(1, weight=1)
+        Label(bottom, text='GRAND TOTAL', font=('poppins',10,'bold'), bg='white').grid(row=0, column=0, sticky=W)
+        self.total_label = Label(bottom, text='₱0.00', font=('poppins',10,'bold'), bg='white')
+        self.total_label.grid(row=0, column=1, sticky=E)
+        Button(bottom, text='Save breakdown', font=('poppins',10,'bold'), bg='#f59a23', fg='black', activebackground='#f59a23',
+               relief=FLAT, cursor='hand2', command=self.save).grid(row=1, column=0, columnspan=2, sticky=EW, pady=(8,0), ipady=3)
+
+    def wheel(self, e):
+        self.canvas.yview_scroll(int(-e.delta/120), "units")
+
+    def set_course(self, course):
+        self.course = course
+        self.course_label.config(text=course)
+        for w in self.inner.winfo_children():
+            w.destroy()
+        self.boxes = []
+        r, last = 0, None
+        for group, name, amt in get_breakdown(course):
+            if group != last:
+                Label(self.inner, text=group, font=('poppins',9,'bold'), bg='white').grid(row=r, column=0, columnspan=3, sticky=W, pady=(8,2))
+                r += 1
+                last = group
+            Label(self.inner, text=name, font=('poppins',9), bg='white', fg='#4d6361').grid(row=r, column=0, sticky=W, padx=(8,10))
+            Label(self.inner, text='₱', font=('poppins',9), bg='white').grid(row=r, column=1)
+            box = Entry(self.inner, font=('poppins',9), width=11, justify=RIGHT)
+            box.insert(0, f"{amt:.2f}")
+            box.grid(row=r, column=2, padx=(2,6), pady=1)
+            box.bind("<KeyRelease>", lambda e: self.update_total())
+            self.boxes.append((name, box))
+            r += 1
+        for w in self.inner.winfo_children():
+            w.bind("<MouseWheel>", self.wheel)
+        self.canvas.yview_moveto(0)
+        self.update_total()
+
+    def update_total(self):
+        total = 0
+        for name, box in self.boxes:
+            try:
+                total += float(box.get().replace(",","").strip())
+            except ValueError:
+                pass
+        self.total_label.config(text=f"₱{total:,.2f}")
+
+    def save(self):
+        if not self.course or not self.boxes:
+            messagebox.showerror("Error","Pick a course from the list first.")
+            return
+        values = []
+        for name, box in self.boxes:
+            t = box.get().replace(",","").strip()
+            if not t.replace(".","",1).isdigit():
+                messagebox.showerror("Error",f"'{name}' must be a number (like 250 or 250.50).")
+                return
+            values.append((name, float(t)))
+        total = sum(a for n, a in values)
+        if total <= 0:
+            messagebox.showerror("Error","The grand total must be more than 0.")
+            return
+        conn = sqlite3.connect("fastq.db")
+        cur = conn.cursor()
+        for name, amt in values:
+            cur.execute("UPDATE fee_items SET amount=? WHERE course=? AND name=?", (amt, self.course, name))
+        cur.execute("UPDATE courses SET total_fee=? WHERE course=?", (total, self.course))
+        conn.commit()
+        conn.close()
+        log_action(current_staff, current_role, "CHANGE FEE", f"{self.course} breakdown, new total ₱{total:,.2f}")
+        reselect_course(self.course)
+        messagebox.showinfo("Saved",f"New grand total for {self.course}: ₱{total:,.2f}")
+
+fee_panel = EditableBreakdown(admin_fees_page)
+fee_panel.grid(row=1,column=2,sticky=NS,padx=(24,0))
+
 def load_fees():
     for row in fees_table.get_children():
         fees_table.delete(row)
@@ -1272,16 +1527,29 @@ def load_fees():
     for r in rows:
         fees_table.insert("",END,values=(r[0],f"₱{r[1]:,.2f}"))
 
+def reselect_course(course):
+    # reload the table, then click the same course again so the panel refreshes
+    load_fees()
+    for item in fees_table.get_children():
+        if fees_table.item(item)['values'][0] == course:
+            fees_table.selection_set(item)
+            fees_table.see(item)
+            break
+    if shown_student_id:
+        show_student(shown_student_id)   # refresh the balance on the Student Finder
+
 def on_fee_select(event):
     selected = fees_table.selection()
     if not selected:
         return
     values = fees_table.item(selected[0])['values']
+    fee_panel.set_course(values[0])
     fee_selected.config(text=values[0])
     fee_entry.delete(0,END)
     fee_entry.insert(0,str(values[1]).replace("₱","").replace(",",""))
 
 def save_fee():
+    # changing the grand total only changes the Tuition part; the other fees stay
     selected = fees_table.selection()
     if not selected:
         messagebox.showerror("Error","Pick a course from the list first.")
@@ -1291,15 +1559,24 @@ def save_fee():
     if not amt or not amt.replace(".","",1).isdigit() or float(amt) <= 0:
         messagebox.showerror("Error","Please input a valid fee.")
         return
+    new_total = float(amt)
+    get_breakdown(course)   # makes sure the fee list exists
     conn = sqlite3.connect("fastq.db")
     cur = conn.cursor()
-    cur.execute("UPDATE courses SET total_fee=? WHERE course=?",(float(amt),course))
+    cur.execute("SELECT COALESCE(SUM(amount),0) FROM fee_items WHERE course=? AND name<>'Total Tuition Fee'", (course,))
+    others = cur.fetchone()[0]
+    tuition = new_total - others
+    if tuition < 0:
+        conn.close()
+        messagebox.showerror("Error",f"That is too low. The other fees already add up to ₱{others:,.2f}.")
+        return
+    cur.execute("UPDATE fee_items SET amount=? WHERE course=? AND name='Total Tuition Fee'", (tuition, course))
+    cur.execute("UPDATE courses SET total_fee=? WHERE course=?", (new_total, course))
     conn.commit()
     conn.close()
-    load_fees()
-    if shown_student_id:
-        show_student(shown_student_id)   # refresh the balance on the Student Finder
-    messagebox.showinfo("Saved",f"New fee for {course}: ₱{float(amt):,.2f}")
+    log_action(current_staff, current_role, "CHANGE FEE", f"{course}: new total ₱{new_total:,.2f}")
+    reselect_course(course)
+    messagebox.showinfo("Saved",f"New fee for {course}: ₱{new_total:,.2f}")
 
 fees_table.bind("<<TreeviewSelect>>",on_fee_select)
 
@@ -1384,6 +1661,7 @@ def save_student_changes():
     cur.execute("UPDATE queue SET name=? WHERE student_id=?",(f"{first} {last}",sid))   # fix the name on old queue entries too
     conn.commit()
     conn.close()
+    log_action(current_staff, current_role, "EDIT STUDENT", f"{sid}: {first} {last}, {course}")
     load_students()
     load_queue()
     if shown_student_id == sid:
@@ -1403,6 +1681,7 @@ def delete_student():
     cur = conn.cursor()
     cur.execute("DELETE FROM students WHERE student_id=?",(sid,))
     conn.commit()
+    log_action(current_staff, current_role, "DELETE STUDENT", f"Student {sid}")
     conn.close()
     if shown_student_id == sid:
         clear_student_display()
@@ -1436,6 +1715,99 @@ save_student_btn.grid(row=1,column=3,padx=(0,8))
 delete_student_btn = Button(st_form,text='Delete',font=('poppins',10,'bold'),bg='#c0392b',fg='white',activebackground='#c0392b',relief=FLAT,padx=16,pady=4,cursor='hand2',command=delete_student)
 delete_student_btn.grid(row=1,column=4)
 
+#---------------------------------------------------------------------------------------------------------------------------------
+# 5) ACTIVITY LOG (view only, nobody can edit or delete)
+admin_log_page = Frame(admin_content,bg='white',padx=24,pady=18)
+admin_log_page.grid_columnconfigure(0,weight=1)
+admin_log_page.grid_rowconfigure(2,weight=1)
+Label(admin_log_page,text='Activity log',font=('poppins',15,'bold'),bg='white').grid(row=0,column=0,sticky=W,pady=(0,10))
+
+log_table = Treeview(admin_log_page,columns=("#","Username","Role","Action","Details","When"),show='headings',height=10)
+log_table.grid(row=2,column=0,sticky=NSEW)
+for col_name, col_width, col_anchor in [("#",70,CENTER),("Username",190,W),("Role",90,CENTER),("Action",170,W),("Details",450,W),("When",190,CENTER)]:
+    log_table.heading(col_name, text=col_name)
+    log_table.column(col_name, width=col_width, anchor=col_anchor)
+
+log_scrollbar = Scrollbar(admin_log_page,orient=VERTICAL,command=log_table.yview)
+log_table.config(yscrollcommand=log_scrollbar.set)
+log_scrollbar.grid(row=2,column=1,sticky=NS)
+
+def load_log():
+    for row in log_table.get_children():
+        log_table.delete(row)
+    query = """SELECT id, username, role, action, details, datetime(created_at,'localtime')
+               FROM activity_log WHERE 1=1"""
+    params = []
+    search = log_search.get().strip()
+    if search:
+        query += " AND (username LIKE ? OR details LIKE ?)"
+        params += [f"%{search}%", f"%{search}%"]
+    if log_role.get() != "All":
+        query += " AND role=?"
+        params.append(log_role.get())
+    if log_action_filter.get() != "All":
+        query += " AND action=?"
+        params.append(log_action_filter.get())
+    if log_date.get().strip():
+        query += " AND date(created_at,'localtime') = ?"
+        params.append(log_date.get().strip())
+    query += " ORDER BY id DESC"
+    conn = sqlite3.connect("fastq.db")
+    cur = conn.cursor()
+    cur.execute(query, params)
+    rows = cur.fetchall()
+    conn.close()
+    for r in rows:
+        log_table.insert("",END,values=(r[0],r[1],r[2],r[3],r[4],fmt_time(r[5])))
+
+def clear_log_filters():
+    log_search.delete(0,END)
+    log_role.set("All")
+    log_action_filter.set("All")
+    log_date.delete(0,END)
+    load_log()
+
+log_bar = Frame(admin_log_page,bg='white')
+log_bar.grid(row=1,column=0,columnspan=2,sticky=EW,pady=(0,12))
+
+Label(log_bar,text='Search',font=('poppins',10),fg='#4d6361',bg='white').grid(row=0,column=0,sticky=W)
+log_search = Entry(log_bar,font=('poppins',10),width=24)
+log_search.grid(row=1,column=0,padx=(0,14),ipady=3)
+log_search.bind("<KeyRelease>",lambda e: load_log())
+
+Label(log_bar,text='Role',font=('poppins',10),fg='#4d6361',bg='white').grid(row=0,column=1,sticky=W)
+log_role = Combobox(log_bar,values=["All","admin","staff","student"],font=('poppins',10),width=10,state='readonly')
+log_role.set("All")
+log_role.grid(row=1,column=1,padx=(0,14))
+log_role.bind("<<ComboboxSelected>>",lambda e: load_log())
+
+Label(log_bar,text='Action',font=('poppins',10),fg='#4d6361',bg='white').grid(row=0,column=2,sticky=W)
+log_action_filter = Combobox(log_bar,values=["All","LOGIN","LOGOUT","GET QUEUE NUMBER","MARK PAID","UNDO PAID","CANCEL ENTRY",
+    "REGISTER STUDENT","EDIT STUDENT","DELETE STUDENT","ADD STAFF","RESET PASSWORD","REMOVE STAFF","CHANGE FEE"],
+    font=('poppins',10),width=20,state='readonly')
+log_action_filter.set("All")
+log_action_filter.grid(row=1,column=2,padx=(0,14))
+log_action_filter.bind("<<ComboboxSelected>>",lambda e: load_log())
+
+Label(log_bar,text='Date',font=('poppins',10),fg='#4d6361',bg='white').grid(row=0,column=3,sticky=W)
+log_date = DateEntry(log_bar,font=('poppins',10),width=14,date_pattern='yyyy-mm-dd')
+log_date.delete(0,END)   # start empty, so all dates show
+log_date.grid(row=1,column=3,padx=(0,14),ipady=3)
+log_date.bind("<<DateEntrySelected>>",lambda e: load_log())
+
+Button(log_bar,text='Clear',font=('poppins',10,'bold'),bg='white',fg='black',activebackground='white',relief=FLAT,padx=16,pady=4,cursor='hand2',command=clear_log_filters).grid(row=1,column=4)
+
+def show_log_sub():
+    admin_staff_page.grid_remove()
+    admin_queue_page.grid_remove()
+    admin_fees_page.grid_remove()
+    admin_students_page.grid_remove()
+    admin_log_page.grid(row=0,column=0,sticky=NSEW,padx=32,pady=(12,28))
+    load_log()
+
+log_sub_btn = Button(admin_subbar,text='Activity log',font=('poppins',10,'bold'),bg='white',relief=GROOVE,padx=18,pady=6,cursor='hand2',command=show_log_sub)
+log_sub_btn.pack(side=LEFT,padx=(0,8))
+
 #================================================================================================================================
 #STUDENT DASHBOARD (self-service: fill the form, get a queue number)
 student_dashboard_frame = Frame(window,bg='#f2f5f4')
@@ -1443,6 +1815,7 @@ student_dashboard_frame.grid_columnconfigure(0,weight=1)
 student_dashboard_frame.grid_rowconfigure(1,weight=1)
 
 def student_logout():
+    log_action(current_student, "student", "LOGOUT", "Logged out")
     student_dashboard_frame.grid_remove()
     window.config(background="white")
     username.delete(0,END)
@@ -1479,6 +1852,10 @@ sp_balance = Label(sp_left,text='-',font=('poppins',24,'bold'),bg='#203c3c',fg='
 sp_balance.grid(row=2,column=0,sticky=W)
 sp_limit = Label(sp_left,text='',font=('poppins',10),bg='#203c3c',fg='#9fb8b5')
 sp_limit.grid(row=3,column=0,sticky=W)
+sp_left.grid_columnconfigure(0,weight=1)
+sp_breakdown = BreakdownBox(sp_left,bg='#203c3c',fg='white',sub='#9fb8b5')
+sp_breakdown.grid(row=4,column=0,sticky=EW,pady=(10,0))
+
 
 # middle: purpose of payment
 sp_mid = Frame(sp_frame,bg='white')
@@ -1488,17 +1865,19 @@ sp_mid.grid_rowconfigure(1,weight=1)
 Label(sp_mid,text='Purpose of payment',font=('poppins',10),fg='#4d6361',bg='white').grid(row=0,column=0,sticky=W)
 sp_table = Frame(sp_mid,bg='white')
 sp_table.grid(row=1,column=0,sticky=NSEW,pady=(2,0))
-for c in range(3):
+for c in range(6):
     sp_table.grid_columnconfigure(c,weight=1,uniform='purpose')
-for r in range(2):
+for r in range(3):
     sp_table.grid_rowconfigure(r,weight=1)
 
-sp_items = ["Tuition Fee","Books","Uniforms","Registrar Transactions","Others"]
-sp_spots = {"Tuition Fee":(0,0,1),"Books":(0,1,1),"Uniforms":(0,2,1),"Registrar Transactions":(1,0,1),"Others":(1,1,2)}
+sp_items = ["Tuition Fee (Full)","Installment","Books","Uniforms","Registrar Transactions","Others"]
+sp_spots = {"Tuition Fee (Full)":(0,0,3),"Installment":(0,3,3),"Books":(1,0,2),"Uniforms":(1,2,2),"Registrar Transactions":(1,4,2),"Others":(2,0,6)}
 sp_vars = {}
 sp_amounts = {}
 sp_cells = {}
 sp_cell_widgets = {}
+sp_chk = {}
+sp_next_inst = 0
 
 def sp_cell_look(item, on):
     bg = '#fff8ec' if on else 'white'
@@ -1520,11 +1899,27 @@ def sp_total():
 def sp_update_total():
     sp_total_label.config(text=f"₱{sp_total():,.2f}")
 
+def installment_amount():
+    course = get_student_info(current_student)[2]
+    if sp_next_inst == 3:
+        return get_payable(current_student, course) or 0   # installment 3 = whatever is left
+    return round((get_grand_total(course) or 0) * 0.333, 2)
+
 def sp_toggle(item):
     on = sp_vars[item].get()
     if on:
         sp_amounts[item].config(state=NORMAL)
-        sp_amounts[item].focus()
+        if item == "Installment":
+            sp_amounts[item].delete(0,END)
+            sp_amounts[item].insert(0,f"{installment_amount():.2f}")
+            sp_amounts[item].config(state=DISABLED)   # auto amount, can't edit
+        elif item == "Tuition Fee (Full)":
+            course = get_student_info(current_student)[2]
+            sp_amounts[item].delete(0,END)
+            sp_amounts[item].insert(0,f"{(get_payable(current_student, course) or 0):.2f}")
+            sp_amounts[item].config(state=DISABLED)   # auto amount, can't edit
+        else:
+            sp_amounts[item].focus()
     else:
         sp_amounts[item].delete(0,END)
         sp_amounts[item].config(state=DISABLED)
@@ -1551,7 +1946,9 @@ for item in sp_items:
     amt.bind("<KeyRelease>", lambda e: sp_update_total())
     sp_amounts[item] = amt
     sp_cell_widgets[item] = [chk, peso]
+    sp_chk[item] = chk
 
+    
 # right: total + button
 sp_total_card = Frame(sp_frame,bg='#203c3c',padx=22,pady=16)
 sp_total_card.grid(row=1,column=2,sticky=NSEW,padx=(30,0))
@@ -1583,14 +1980,40 @@ def load_my_payments():
         my_list.delete(row)
     conn = sqlite3.connect("fastq.db")
     cur = conn.cursor()
-    cur.execute("""SELECT id, payment_for, amount, status, datetime(created_at,'localtime')
+    cur.execute("""SELECT id, payment_for, amount, status,
+                          datetime(created_at,'localtime'), datetime(paid_at,'localtime')
                 FROM queue WHERE student_id=? ORDER BY id DESC""", (current_student,))
     rows = cur.fetchall()
     conn.close()
     for r in rows:
-        time_text = datetime.strptime(r[4], "%Y-%m-%d %H:%M:%S").strftime("%b %d, %Y %I:%M %p") if r[4] else ""
         tag = 'paid' if r[3] == 'Paid' else ''
-        my_list.insert("", END, values=(r[0], r[1], f"₱{r[2]:,.2f}", r[3], time_text), tags=(tag,))
+        my_list.insert("", END, values=(r[0], r[1], f"₱{r[2]:,.2f}", r[3], fmt_time(r[4]), fmt_time(r[5])), tags=(tag,))
+
+
+def update_installment(course):
+    global sp_next_inst
+    conn = sqlite3.connect("fastq.db")
+    cur = conn.cursor()
+    cur.execute("SELECT payment_for, status FROM queue WHERE student_id=? AND payment_for LIKE '%Installment%'", (current_student,))
+    rows = cur.fetchall()
+    conn.close()
+    paid = " ".join(r[0] for r in rows if r[1] == 'Paid')
+    waiting = any(r[1] == 'Waiting' for r in rows)
+    sp_next_inst = 0
+    for n in (1,2,3):
+        if f"Installment {n}" not in paid:
+            sp_next_inst = n
+            break
+    chk = sp_chk["Installment"]
+    if sp_next_inst == 0 or get_grand_total(course) is None:
+        chk.config(text="Installment (all paid)", state=DISABLED)
+    elif waiting:
+        chk.config(text=f"Installment {sp_next_inst} (in queue)", state=DISABLED)
+    else:
+        chk.config(text=f"Installment {sp_next_inst}", state=NORMAL)
+    sp_vars["Installment"].set(False)
+    sp_toggle("Installment")
+
 
 def refresh_student_page():
     course = get_student_info(current_student)[2]
@@ -1602,6 +2025,8 @@ def refresh_student_page():
     else:
         sp_balance.config(text=f"₱{bal:,.2f}")
         sp_limit.config(text=f"You can pay up to ₱{get_payable(current_student, course):,.2f}")
+    sp_breakdown.set_course(course)
+    update_installment(course)
     load_my_payments()
 
 def submit_payment():
@@ -1619,7 +2044,7 @@ def submit_payment():
             if not amt or not amt.replace(".","",1).isdigit() or float(amt) <= 0:
                 messagebox.showerror("Error", f"Please input a valid amount for {item}.")
                 return
-            label = item
+            label = f"Installment {sp_next_inst}" if item == "Installment" else item
             if item == "Others":
                 what = sp_others.get().strip()
                 if not what:
@@ -1644,6 +2069,7 @@ def submit_payment():
     conn.commit()
     queue_number = cur.lastrowid
     conn.close()
+    log_action(current_student, "student", "GET QUEUE NUMBER", f"Queue #{queue_number}, ₱{total:,.2f}")
 
     messagebox.showinfo("Your queue number", f"Queue number: #{queue_number}\nPlease go to the finance office and wait for your turn.")
     reset_payment_form()
@@ -1658,12 +2084,15 @@ sp_list_card.grid_rowconfigure(1,weight=1)
 sp_list_card.grid_columnconfigure(0,weight=1)
 Label(sp_list_card,text='My payments',font=('poppins',15,'bold'),bg='white').grid(row=0,column=0,sticky=W,pady=(0,12))
 
-my_list = Treeview(sp_list_card,columns=("Queue #","Payment for","Amount","Status","Created at"),show='headings',height=8)
+my_list = Treeview(sp_list_card,columns=("Queue #","Payment for","Amount","Status","Created at","Paid at"),show='headings',height=8)
 my_list.grid(row=1,column=0,sticky=NSEW)
-for col_name, col_width, col_anchor in [("Queue #",90,CENTER),("Payment for",400,W),("Amount",140,E),("Status",110,CENTER),("Created at",200,CENTER)]:
+for col_name, col_width, col_anchor in [("Queue #",90,CENTER),("Payment for",400,W),("Amount",140,E),("Status",110,CENTER),("Created at",200,CENTER),("Paid at",200,CENTER)]:
     my_list.heading(col_name, text=col_name)
     my_list.column(col_name, width=col_width, anchor=col_anchor)
 my_list.tag_configure('paid', background='#eaf6ef')
+
+Button(sp_list_card,text="View receipt",font=('poppins',10,'bold'),bg='#f59a23',activebackground='#e08a15',relief=FLAT,padx=18,pady=6,command=view_my_receipt).grid(row=2,column=0,sticky=E,pady=(10,0))
+my_list.bind("<Double-1>", lambda e: view_my_receipt())
 
 load_queue()
 

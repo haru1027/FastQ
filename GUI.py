@@ -45,6 +45,9 @@ MISC_FEES = [("APSCU",20),("AV & Internet",390),("Exam Materials",100),("Insuran
             ("Student Manual",50),("Student Organization Fee",30)]
 OTHER_FEES = [("Uniform Fee",2295),("NSTP Fee",1259),("Aircon Fees",703)]
 LAB_FEE = 3600
+# Finds a student's category (PWD or Regular) for any queue row.
+CAT_SQL = "COALESCE((SELECT category FROM students WHERE students.student_id=queue.student_id),'Regular')"
+BOOKS_FEE = 2500   # change this to any amount you like
 LAB_COURSES = {"BS Information Technology","BS Architecture","BS Computer Engineering","BS Civil Engineering",
             "BS Electrical Engineering","BS Mechanical Engineering","BS Nursing","BS Pharmacy",
             "BS Medical Laboratory Science","BS Hospitality Management"}
@@ -84,10 +87,36 @@ def get_breakdown(course):
         for i, (g, n, a) in enumerate(rows):
             cur.execute("INSERT INTO fee_items (course, grp, name, amount, sort) VALUES (?,?,?,?,?)", (course, g, n, a, i))
         conn.commit()
+    cur.execute("SELECT COUNT(*) FROM fee_items WHERE course=? AND name='Books'", (course,))
+    if cur.fetchone()[0] == 0:
+        cur.execute("SELECT COALESCE(MAX(sort),0)+1 FROM fee_items WHERE course=?", (course,))
+        next_sort = cur.fetchone()[0]
+        cur.execute("INSERT INTO fee_items (course, grp, name, amount, sort) VALUES (?,?,?,?,?)",
+                    (course, "Other Subject Fees", "Books", BOOKS_FEE, next_sort))
+        cur.execute("UPDATE fee_items SET amount = amount - ? WHERE course=? AND name='Total Tuition Fee'", (BOOKS_FEE, course))
+        conn.commit()
     cur.execute("SELECT grp, name, amount FROM fee_items WHERE course=? ORDER BY sort", (course,))
     rows = cur.fetchall()
     conn.close()
     return rows
+
+def get_books_price(course):
+    get_breakdown(course)   # makes sure Books exists
+    conn = sqlite3.connect("fastq.db")
+    cur = conn.cursor()
+    cur.execute("SELECT amount FROM fee_items WHERE course=? AND name='Books'", (course,))
+    row = cur.fetchone()
+    conn.close()
+    return row[0] if row else 0
+
+def get_uniform_price(course):
+    get_breakdown(course)   # makes sure the fee list exists
+    conn = sqlite3.connect("fastq.db")
+    cur = conn.cursor()
+    cur.execute("SELECT amount FROM fee_items WHERE course=? AND name='Uniform Fee'", (course,))
+    row = cur.fetchone()
+    conn.close()
+    return row[0] if row else 0
 
 class BreakdownBox(Frame):
     # "Show breakdown" dropdown: a floating, scrollable box (doesn't stretch the page)
@@ -191,7 +220,6 @@ def init_db():
             name TEXT NOT NULL,
             payment_for TEXT NOT NULL,
             amount REAL NOT NULL,
-            payment_method TEXT NOT NULL,
             status TEXT DEFAULT 'Waiting',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
     try:
@@ -207,6 +235,11 @@ def init_db():
         cursor.execute("ALTER TABLE staff ADD COLUMN role TEXT DEFAULT 'staff'")
     except sqlite3.OperationalError:
         pass
+    try:
+        cursor.execute("ALTER TABLE students ADD COLUMN category TEXT DEFAULT 'Regular'")
+    except sqlite3.OperationalError:
+        pass
+    cursor.execute("UPDATE students SET category='Regular' WHERE category IS NULL OR category=''")
     cursor.execute("INSERT OR IGNORE INTO staff (username, password, role) VALUES ('admin', '1234', 'admin')")
     cursor.execute("UPDATE staff SET role='admin' WHERE username='admin'")
     cursor.execute("""
@@ -230,12 +263,203 @@ def init_db():
         cursor.execute("ALTER TABLE queue ADD COLUMN receipt_no TEXT")
     except sqlite3.OperationalError:
         pass
+    try:
+        cursor.execute("ALTER TABLE queue ADD COLUMN extra REAL DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass
+    cursor.execute("PRAGMA table_info(queue)")
+    queue_columns = {row[1] for row in cursor.fetchall()}
+    if "payment_method" in queue_columns:
+        cursor.execute("DROP TABLE IF EXISTS queue_without_payment_method")
+        cursor.execute("""
+            CREATE TABLE queue_without_payment_method (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                student_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                payment_for TEXT NOT NULL,
+                amount REAL NOT NULL,
+                status TEXT DEFAULT 'Waiting',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                staff TEXT,
+                paid_at TIMESTAMP,
+                receipt_no TEXT,
+                extra REAL DEFAULT 0)""")
+        cursor.execute("""
+            INSERT INTO queue_without_payment_method
+                (id, student_id, name, payment_for, amount, status, created_at,
+                 staff, paid_at, receipt_no, extra)
+            SELECT id, student_id, name, payment_for, amount, status, created_at,
+                   staff, paid_at, receipt_no, extra
+            FROM queue""")
+        cursor.execute("DROP TABLE queue")
+        cursor.execute("ALTER TABLE queue_without_payment_method RENAME TO queue")
     # Give old paid entries a receipt number too.
     cursor.execute("UPDATE queue SET receipt_no='OR-'||printf('%06d', id) WHERE status='Paid' AND receipt_no IS NULL")
     conn.commit()
     conn.close()
 init_db()
 
+
+# ===================== NOW SERVING =====================
+WINDOWS = ["Window 1", "Window 2", "Window 3"]
+ns_widgets = []
+
+def init_now_serving():
+    conn = sqlite3.connect("fastq.db")
+    cur = conn.cursor()
+    cur.execute("""CREATE TABLE IF NOT EXISTS now_serving (
+        id INTEGER PRIMARY KEY,
+        queue_id INTEGER,
+        window TEXT
+    )""")
+    cur.execute("INSERT OR IGNORE INTO now_serving (id, queue_id, window) VALUES (1, NULL, NULL)")
+    conn.commit()
+    conn.close()
+
+init_now_serving()
+
+def short_name(name):
+    parts = name.split()
+    return name if len(parts) < 2 else " ".join(parts[:-1]) + " " + parts[-1][0] + "."
+
+def get_now_serving():
+    conn = sqlite3.connect("fastq.db")
+    cur = conn.cursor()
+    cur.execute("""SELECT q.id, q.name, q.student_id, q.payment_for, q.amount, n.window
+                   FROM now_serving n JOIN queue q ON q.id = n.queue_id WHERE n.id=1""")
+    row = cur.fetchone()
+    conn.close()
+    return row
+
+def make_now_serving(parent, staff):
+    GREEN, ORANGE, SOFT = '#203c3c', '#f59a23', '#9fb8b5'
+    box = Frame(parent, bg=GREEN, padx=24, pady=16)
+    box.grid_columnconfigure(2, weight=1)
+    w = {"staff": staff}
+
+    Label(box, text="NOW SERVING", font=('poppins',10,'bold'), bg=GREEN, fg=ORANGE).grid(row=0, column=0, sticky=W)
+    w["number"] = Label(box, text="-", font=('poppins',36,'bold'), bg=GREEN, fg=ORANGE, width=5, anchor=W)
+    w["number"].grid(row=1, column=0, sticky=W)
+    Frame(box, width=1, bg='#4b6a6f').grid(row=0, column=1, rowspan=2, sticky=NS, padx=20)
+
+    mid = Frame(box, bg=GREEN)
+    mid.grid(row=0, column=2, rowspan=2, sticky=W)
+    w["name"] = Label(mid, text="No one is being served", font=('poppins',16,'bold'), bg=GREEN, fg='white', anchor=W)
+    w["name"].grid(row=0, column=0, sticky=W)
+    w["info"] = Label(mid, text="", font=('poppins',10), bg=GREEN, fg=SOFT, anchor=W)
+    w["info"].grid(row=1, column=0, sticky=W)
+
+    win_box = Frame(box, bg=ORANGE, padx=22, pady=8)
+    win_box.grid(row=0, column=3, rowspan=2, padx=(20,0))
+    Label(win_box, text="Please go to", font=('poppins',10), bg=ORANGE, fg='black').pack()
+    w["window_lbl"] = Label(win_box, text="-", font=('poppins',20,'bold'), bg=ORANGE, fg='black')
+    w["window_lbl"].pack()
+
+    right = Frame(box, bg=GREEN)
+    right.grid(row=0, column=4, rowspan=2, padx=(24,0))
+    if staff:
+        w["waiting"] = Label(right, text="0 waiting", font=('poppins',10), bg=GREEN, fg=SOFT)
+        w["waiting"].grid(row=0, column=0, columnspan=2, sticky=E)
+        w["win_pick"] = Combobox(right, values=WINDOWS, font=('poppins',10), width=10, state='readonly')
+        w["win_pick"].set(WINDOWS[0])
+        w["win_pick"].grid(row=1, column=0, columnspan=2, sticky=EW, pady=6)
+        Button(right, text="Call next", font=('poppins',10,'bold'), fg='white', bg='#1f7a4d', activebackground='#186340',
+               activeforeground='white', relief=FLAT, padx=14, pady=4, command=lambda: call_next(w)).grid(row=2, column=0, padx=(0,6))
+        Button(right, text="Recall", font=('poppins',10,'bold'), fg='white', bg='#2c6e9b', activebackground='#245a80',
+               activeforeground='white', relief=FLAT, padx=14, pady=4, command=recall).grid(row=2, column=1)
+    else:
+        w["mine"] = Label(right, text="Your number: -", font=('poppins',12,'bold'), bg=GREEN, fg=ORANGE)
+        w["mine"].grid(row=0, column=0, sticky=E)
+        w["ahead"] = Label(right, text="", font=('poppins',10), bg=GREEN, fg=SOFT)
+        w["ahead"].grid(row=1, column=0, sticky=E)
+
+    ns_widgets.append(w)
+    return box
+
+def call_next(w):
+    window_name = w["win_pick"].get()
+    conn = sqlite3.connect("fastq.db")
+    cur = conn.cursor()
+    cur.execute("SELECT queue_id FROM now_serving WHERE id=1")
+    current_row = cur.fetchone()
+    current = (current_row[0] or 0) if current_row else 0
+    cur.execute(f"SELECT id FROM queue WHERE status='Waiting' AND {CAT_SQL}='PWD' AND id <> ? ORDER BY id LIMIT 1", (current,))
+    nxt = cur.fetchone()
+    if nxt is None:
+        cur.execute("SELECT id FROM queue WHERE status='Waiting' AND id > ? ORDER BY id LIMIT 1", (current,))
+        nxt = cur.fetchone()
+    if nxt is None:
+        cur.execute("SELECT id FROM queue WHERE status='Waiting' AND id <> ? ORDER BY id LIMIT 1", (current,))
+        nxt = cur.fetchone()
+    if nxt is None:
+        conn.close()
+        messagebox.showinfo("Queue", "No one is waiting right now.")
+        return
+    cur.execute("UPDATE now_serving SET queue_id=?, window=? WHERE id=1", (nxt[0], window_name))
+    conn.commit()
+    conn.close()
+    log_action(current_staff, current_role, "CALL NEXT", f"Queue #{nxt[0]} to {window_name}")
+    refresh_now_serving()
+    load_queue()
+
+def recall():
+    row = get_now_serving()
+    if row is None:
+        messagebox.showinfo("Recall", "No one is being served yet.")
+        return
+    messagebox.showinfo("Recall", f"Calling #{row[0]} - {row[1]}\nPlease go to {row[5]}.")
+
+def refresh_now_serving():
+    row = get_now_serving()
+    conn = sqlite3.connect("fastq.db")
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM queue WHERE status='Waiting'")
+    waiting = cur.fetchone()[0]
+    mine = ahead = None
+    if current_student:
+        cur.execute("SELECT MIN(id) FROM queue WHERE student_id=? AND status='Waiting'", (current_student,))
+        mine = cur.fetchone()[0]
+        if mine:
+            cur.execute(f"SELECT {CAT_SQL} FROM queue WHERE id=?", (mine,))
+            my_cat = cur.fetchone()[0]
+            if my_cat == "PWD":
+                cur.execute(f"SELECT COUNT(*) FROM queue WHERE status='Waiting' AND {CAT_SQL}='PWD' AND id < ?", (mine,))
+            else:
+                cur.execute(f"SELECT COUNT(*) FROM queue WHERE status='Waiting' AND ({CAT_SQL}='PWD' OR id < ?)", (mine,))
+            ahead = cur.fetchone()[0]
+    conn.close()
+
+    for w in ns_widgets:
+        if row:
+            w["number"].config(text=f"#{row[0]}")
+            w["window_lbl"].config(text=row[5] or "-")
+            if w["staff"]:
+                w["name"].config(text=row[1])
+                w["info"].config(text=f"{row[2]}  ·  {row[3]}  ·  ₱{row[4]:,.2f}")
+            else:
+                w["name"].config(text=short_name(row[1]))
+                w["info"].config(text="")
+        else:
+            w["number"].config(text="-")
+            w["window_lbl"].config(text="-")
+            w["name"].config(text="No one is being served")
+            w["info"].config(text="")
+        if w["staff"]:
+            w["waiting"].config(text=f"{waiting} waiting")
+        elif current_student:
+            if mine:
+                w["mine"].config(text=f"Your number: #{mine}")
+                if row and row[0] == mine:
+                    w["ahead"].config(text=f"Your turn! Go to {row[5]}", fg='#6fcf97')
+                else:
+                    w["ahead"].config(text=f"{ahead} ahead of you", fg='#9fb8b5')
+            else:
+                w["mine"].config(text="Your number: -")
+                w["ahead"].config(text="You are not in the queue", fg='#9fb8b5')
+        else:
+            w["mine"].config(text="Your number: -")
+            w["ahead"].config(text="Log in and join the queue to see your number", fg='#9fb8b5')
+# =======================================================
 
 #Window page
 window = Tk()
@@ -484,7 +708,7 @@ admin_tab = Button(tabs_frame,text='Admin',font=('poppins',10,'bold'),bd=0,relie
                 bg='#203c3c',fg='#9fb8b5',activebackground='#203c3c',activeforeground='#9fb8b5',
                 command=lambda: show_page('admin'))
 
-welcome = Label(header,text='Welcome',font=('poppins',10),fg='white',bg='#203c3c')
+welcome = Label(header,text='Welcome',font=('poppins',10,'bold'),fg='white',bg='#203c3c')
 welcome.grid(row=0,column=3,padx=(0,25))
 
 staff_dashboard_backbtn = Button(header,text='Log out',font=('poppins',10,'bold'),fg='black',bg='#f59a23',activebackground='#e08a15',relief=FLAT,padx=20,command=staff_dashboard_back)
@@ -519,6 +743,9 @@ def show_page(name):
 queue_page.grid_columnconfigure(0,weight=1)
 queue_page.grid_rowconfigure(1,weight=1)
 
+staff_now_serving = make_now_serving(queue_page, staff=True)
+staff_now_serving.grid(row=0,column=0,sticky=EW,padx=32,pady=(20,0))
+
 #================================================================================================================================
 #Queue List
 queue_list_dashboard = Frame(queue_page,bg='white',padx=24,pady=18)
@@ -540,38 +767,31 @@ search_entry.grid(row=1,column=1,padx=(0,14),ipady=3)
 search_entry.bind("<KeyRelease>", lambda e: load_queue())
 
 Label(filter_bar,text='Status',font=('poppins',10),fg='#4d6361',bg='white').grid(row=0,column=2,sticky=W)
-status_filter = Combobox(filter_bar,values=["All","Waiting","Paid"],font=('poppins',10),width=10,state='readonly')
+status_filter = Combobox(filter_bar,values=["All","Waiting","Paid","Cancelled"],font=('poppins',10),width=10,state='readonly')
 status_filter.set("All")
 status_filter.grid(row=1,column=2,padx=(0,14))
 status_filter.bind("<<ComboboxSelected>>", lambda e: load_queue())
 
-Label(filter_bar,text='Method',font=('poppins',10),fg='#4d6361',bg='white').grid(row=0,column=3,sticky=W)
-method_filter = Combobox(filter_bar,values=["All","Cash","Online"],font=('poppins',10),width=10,state='readonly')
-method_filter.set("All")
-method_filter.grid(row=1,column=3,padx=(0,14))
-method_filter.bind("<<ComboboxSelected>>", lambda e: load_queue())
-
 def clear_filters():
     search_entry.delete(0,END)
     status_filter.set("All")
-    method_filter.set("All")
     queue_date_entry.delete(0,END)
     load_queue()
 
-Label(filter_bar,text='Specific date',font=('poppins',10),fg='#4d6361',bg='white').grid(row=0,column=5,sticky=W)
+Label(filter_bar,text='Specific date',font=('poppins',10),fg='#4d6361',bg='white').grid(row=0,column=3,sticky=W)
 queue_date_entry = DateEntry(filter_bar,font=('poppins',10),width=12,date_pattern='yyyy-mm-dd')
 queue_date_entry.delete(0,END)   # start empty, so all dates show
-queue_date_entry.grid(row=1,column=5,padx=(0,14),ipady=3)
+queue_date_entry.grid(row=1,column=3,padx=(0,14),ipady=3)
 queue_date_entry.bind("<<DateEntrySelected>>", lambda e: load_queue())
 
 
 clear_filters_btn = Button(filter_bar,text='Clear',font=('poppins',10),bg='white',relief=GROOVE,padx=10,command=clear_filters)
-clear_filters_btn.grid(row=1,column=6)
+clear_filters_btn.grid(row=1,column=4)
 
 
 
 #The table (it grows to fill the screen)
-queue_columns = ("Entry #","Name", "Student ID","Payment for","Amount","Payment method","Status","Created at","Paid at","Receipt #")
+queue_columns = ("Entry #","Name", "Student ID","Payment for","Amount","Status","Category","Created at","Paid at","Receipt #")
 
 style = Style()
 style.theme_use('clam')
@@ -588,8 +808,8 @@ column_settings = [
     ("Student ID", 150, CENTER),
     ("Payment for", 200, W),
     ("Amount", 100, E),
-    ("Payment method", 120, CENTER),
     ("Status", 70, CENTER),
+    ("Category", 80, CENTER),
     ("Created at", 165, CENTER),
     ("Paid at", 165, CENTER),
     ("Receipt #", 120, CENTER),]
@@ -602,6 +822,9 @@ for col_name, col_width, col_anchor in column_settings:
         queue_list.column(col_name, width=col_width, anchor=col_anchor, minwidth=col_width, stretch=False)   # these stay fixed
 
 queue_list.tag_configure('paid', background='#eaf6ef')   # paid rows turn light green
+queue_list.tag_configure('cancelled', foreground='#999999')
+queue_list.tag_configure('serving', background='#fde3b8')  # currently called student
+queue_list.tag_configure('pwd', background='#e3f0fb')
 
 scrollbar = Scrollbar(queue_list_dashboard, orient=VERTICAL, command=queue_list.yview)
 queue_list.config(yscrollcommand=scrollbar.set)
@@ -626,7 +849,7 @@ def get_balance(student_id, course):
     if fee_row is None:
         conn.close()
         return None   # the student has no course set
-    cur.execute("SELECT COALESCE(SUM(amount),0) FROM queue WHERE student_id=? AND status='Paid'", (student_id,))
+    cur.execute("SELECT COALESCE(SUM(amount - COALESCE(extra,0)),0) FROM queue WHERE student_id=? AND status='Paid'", (student_id,))
     paid = cur.fetchone()[0]
     conn.close()
     return fee_row[0] - paid
@@ -635,7 +858,7 @@ def load_queue():
     for row in queue_list.get_children():
         queue_list.delete(row)
 
-    query = """SELECT id, name, student_id, payment_for, amount, payment_method, status,
+    query = f"""SELECT id, name, student_id, payment_for, amount, status, {CAT_SQL},
                     datetime(created_at, 'localtime'), datetime(paid_at, 'localtime'), receipt_no
             FROM queue WHERE 1=1"""
     params = []
@@ -647,9 +870,6 @@ def load_queue():
     if status_filter.get() != "All":
         query += " AND status=?"
         params.append(status_filter.get())
-    if method_filter.get() != "All":
-        query += " AND payment_method=?"
-        params.append(method_filter.get())
     if queue_date_entry.get().strip():
         query += " AND date(created_at,'localtime') = ?"
         params.append(queue_date_entry.get().strip())
@@ -661,16 +881,22 @@ def load_queue():
     rows = cur.fetchall()
     conn.close()
 
+    serving = get_now_serving()
+    serving_id = serving[0] if serving else None
     for r in rows:
-        tag = 'paid' if r[6] == 'Paid' else ''
+        if r[0] == serving_id and r[5] == 'Waiting':
+            tag = 'serving'
+        else:
+            tag = 'paid' if r[5] == 'Paid' else ('cancelled' if r[5] == 'Cancelled' else ('pwd' if r[6] == 'PWD' else ''))
         queue_list.insert("", END, values=(r[0], r[1], r[2], r[3], f"₱{r[4]:,.2f}", r[5], r[6], fmt_time(r[7]), fmt_time(r[8]), r[9] or "-"), tags=(tag,))
+    refresh_now_serving()
 
 
 
 def show_receipt(queue_id):
     conn = sqlite3.connect("fastq.db")
     cur = conn.cursor()
-    cur.execute("""SELECT receipt_no, student_id, name, payment_for, amount, payment_method,
+    cur.execute("""SELECT receipt_no, student_id, name, payment_for, amount,
                           COALESCE(staff,'-'), datetime(paid_at,'localtime')
                    FROM queue WHERE id=? AND status='Paid'""", (queue_id,))
     row = cur.fetchone()
@@ -688,14 +914,13 @@ def show_receipt(queue_id):
         "OFFICIAL RECEIPT".center(42),
         "=" * 42,
         f"Receipt No.:  {row[0]}",
-        f"Date:         {fmt_time(row[7])}",
+        f"Date:         {fmt_time(row[6])}",
         f"Student:      {row[2]}",
         f"Student ID:   {row[1]}",
         f"Course:       {course}",
         f"For:          {row[3]}",
         f"Amount:       ₱{row[4]:,.2f}",
-        f"Method:       {row[5]}",
-        f"Received by:  {row[6]}",
+        f"Received by:  {row[5]}",
         "=" * 42,
         "Thank you for your payment!".center(42),
         "=" * 42,
@@ -734,10 +959,13 @@ def mark_as_paid():
         return
     values = queue_list.item(selected[0])['values']
     entry_number = values[0]
-    status = values[6]
+    status = values[5]
 
     if status == "Paid":
         messagebox.showinfo("Info", "This entry is already paid.")
+        return
+    if status == "Cancelled":
+        messagebox.showerror("Error", "This entry was cancelled.")
         return
 
     # ask first before doing anything
@@ -767,7 +995,7 @@ def undo_paid():
         return
     values = queue_list.item(selected[0])['values']
     entry_number = values[0]
-    status = values[6]
+    status = values[5]
 
     if status != "Paid":
         messagebox.showerror("Error", "Only paid entries can be changed back to waiting.")
@@ -798,14 +1026,15 @@ def cancel_entry():
         messagebox.showerror("Error", "Please select an entry in the queue list first.")
         return
     values = queue_list.item(selected[0])['values']
-    if values[6] != "Waiting":
+    if values[5] != "Waiting":
         messagebox.showerror("Error", "Only entries that are still waiting can be cancelled.")
         return
-    if not messagebox.askyesno("Cancel entry", f"Cancel and delete queue entry #{values[0]}?"):
+    if not messagebox.askyesno("Cancel entry", f"Cancel queue entry #{values[0]}?"):
         return
     conn = sqlite3.connect("fastq.db")
     cur = conn.cursor()
-    cur.execute("DELETE FROM queue WHERE id=?", (values[0],))
+    cur.execute("UPDATE queue SET status='Cancelled' WHERE id=?", (values[0],))
+    cur.execute("UPDATE now_serving SET queue_id=NULL, window=NULL WHERE queue_id=?", (values[0],))
     conn.commit()
     conn.close()
     log_action(current_staff, current_role, "CANCEL ENTRY", f"Entry #{values[0]}, {values[1]}, {values[4]}")
@@ -839,15 +1068,15 @@ def load_recent_transactions(student_id):
 
     conn = sqlite3.connect("fastq.db")
     cur = conn.cursor()
-    cur.execute("""SELECT datetime(created_at,'localtime'), payment_for, amount, payment_method, status
+    cur.execute("""SELECT datetime(created_at,'localtime'), payment_for, amount, status,
+                          datetime(paid_at,'localtime')
                 FROM queue WHERE student_id=? ORDER BY id DESC LIMIT 8""", (student_id,))
     rows = cur.fetchall()
     conn.close()
 
     for r in rows:
-        date_text = datetime.strptime(r[0], "%Y-%m-%d %H:%M:%S").strftime("%b %d, %Y") if r[0] else ""
-        tag = 'paid' if r[4] == 'Paid' else ''
-        recent_list.insert("", END, values=(date_text, r[1], f"₱{r[2]:,.2f}", r[3], r[4]), tags=(tag,))
+        tag = 'paid' if r[3] == 'Paid' else ''
+        recent_list.insert("", END, values=(r[1], f"₱{r[2]:,.2f}", r[3], fmt_time(r[0]), fmt_time(r[4])), tags=(tag,))
 
 
 shown_student_id = ""   # remembers which student is on screen
@@ -964,11 +1193,11 @@ recent_transactions = Label(recent_card,text='Recent transactions',font=('poppin
 recent_transactions.grid(row=0,column=0,sticky=W,pady=(0,12))
 Label(recent_card,text='Last 8 payments',font=('poppins',10),bg='white',fg='#4d6361').grid(row=0,column=1,sticky=E)
 
-recent_columns = ("Date","Payment for","Amount","Method","Status")
+recent_columns = ("Payment for","Amount","Status","Created at","Paid at")
 recent_list = Treeview(recent_card,columns=recent_columns,show='headings',height=10)
 recent_list.grid(row=1,column=0,columnspan=2,sticky=NSEW)
 
-recent_widths = [("Date",130,CENTER),("Payment for",300,W),("Amount",130,E),("Method",110,CENTER),("Status",100,CENTER)]
+recent_widths = [("Payment for",260,W),("Amount",120,E),("Status",90,CENTER),("Created at",180,CENTER),("Paid at",180,CENTER)]
 for col_name, col_width, col_anchor in recent_widths:
     recent_list.heading(col_name, text=col_name)
     recent_list.column(col_name, width=col_width, anchor=col_anchor)
@@ -980,8 +1209,8 @@ recent_list.tag_configure('paid', background='#eaf6ef')   #paid row s turns ligh
 
 register_page.grid_columnconfigure(0,weight=1)
 
-regframe = Frame(register_page,bg='white',padx=44,pady=40,highlightbackground='#dfe6e5',highlightthickness=1)
-regframe.grid(row=0,column=0,pady=(60,0),sticky=N)
+regframe = Frame(register_page,bg='white',padx=44,pady=22,highlightbackground='#dfe6e5',highlightthickness=1)
+regframe.grid(row=0,column=0,pady=(12,12),sticky=N)
 regframe.grid_columnconfigure(0,weight=1,uniform='names',minsize=230)
 regframe.grid_columnconfigure(1,weight=1,uniform='names',minsize=230)
 
@@ -990,14 +1219,14 @@ def make_entry(row, column, span=1, padx=(0,0)):
     box = Frame(regframe,bg='white',highlightbackground='#c5d0cf',highlightthickness=1)
     box.grid(row=row,column=column,columnspan=span,sticky=EW,padx=padx,pady=(4,0))
     entry = Entry(box,font=('poppins',12),bg='white',relief=FLAT,bd=0)
-    entry.pack(fill=X,padx=10,ipady=8)
+    entry.pack(fill=X,padx=10,ipady=6)
     return entry
 
 create = Label(regframe,text="Register a student",font=('poppins',22,'bold'),fg='black',bg='white')
 create.grid(row=0,column=0,columnspan=2,sticky=W)
 
 create_label = Label(regframe,text='Add a new student profile to the system',font=('poppins',10),fg='gray',bg='white')
-create_label.grid(row=1,column=0,columnspan=2,sticky=W,pady=(4,25))
+create_label.grid(row=1,column=0,columnspan=2,sticky=W,pady=(4,14))
 
 create_firstname = Label(regframe,text='First name',font=('poppins',10),fg='gray',bg='white')
 create_firstname.grid(row=2,column=0,sticky=W)
@@ -1008,19 +1237,25 @@ create_lastname.grid(row=2,column=1,sticky=W,padx=(8,0))
 create_lastname_entry = make_entry(3,1,padx=(8,0))
 
 create_studentid = Label(regframe,text='Student ID(00-00-0000-000000)',font=('poppins',10),fg='gray',bg='white')
-create_studentid.grid(row=4,column=0,columnspan=2,sticky=W,pady=(18,0))
+create_studentid.grid(row=4,column=0,columnspan=2,sticky=W,pady=(10,0))
 create_studentid_entry = make_entry(5,0,span=2)
 
 course_list = list(COURSE_FEES.keys())
 
 create_course = Label(regframe,text='Course',font=('poppins',10),fg='gray',bg='white')
-create_course.grid(row=6,column=0,columnspan=2,sticky=W,pady=(18,0))
+create_course.grid(row=6,column=0,columnspan=2,sticky=W,pady=(10,0))
 create_course_combo = Combobox(regframe,values=course_list,font=('poppins',12),state='readonly')
-create_course_combo.grid(row=7,column=0,columnspan=2,sticky=EW,pady=(4,0),ipady=6)
+create_course_combo.grid(row=7,column=0,columnspan=2,sticky=EW,pady=(4,0),ipady=3)
+
+create_cat = Label(regframe,text='Category',font=('poppins',10),fg='gray',bg='white')
+create_cat.grid(row=8,column=0,columnspan=2,sticky=W,pady=(10,0))
+create_cat_combo = Combobox(regframe,values=["Regular","PWD"],font=('poppins',12),state='readonly')
+create_cat_combo.set("Regular")
+create_cat_combo.grid(row=9,column=0,columnspan=2,sticky=EW,pady=(4,0),ipady=3)
 
 create_pw = Label(regframe,text="Student's password",font=('poppins',10),fg='gray',bg='white')
-create_pw.grid(row=8,column=0,columnspan=2,sticky=W,pady=(18,0))
-create_pw_entry = make_entry(9,0,span=2)
+create_pw.grid(row=10,column=0,columnspan=2,sticky=W,pady=(10,0))
+create_pw_entry = make_entry(11,0,span=2)
 
 style.map('TCombobox',
         fieldbackground=[('readonly','white')],
@@ -1031,6 +1266,7 @@ def clear_register_fields():
     create_lastname_entry.delete(0,END)
     create_studentid_entry.delete(0,END)
     create_course_combo.set('')
+    create_cat_combo.set('Regular')
     create_pw_entry.delete(0,END)
 
 def back():
@@ -1042,6 +1278,7 @@ def createaccount():
         cf = create_firstname_entry.get().strip()
         cl = create_lastname_entry.get().strip()
         cc = create_course_combo.get()
+        cat = create_cat_combo.get() or "Regular"
         cs = create_studentid_entry.get().strip()
         pw = create_pw_entry.get()
         if not cf or not cl or not cs or not cc or not pw:
@@ -1064,9 +1301,9 @@ def createaccount():
         cursor = conn.cursor()
         try:
             cursor.execute("""
-                    INSERT INTO students (student_id, first_name, last_name, password, course)
-                    VALUES (?, ?, ?, ?, ?)
-            """, (cs, cf, cl, pw, cc))
+                    INSERT INTO students (student_id, first_name, last_name, password, course, category)
+                    VALUES (?, ?, ?, ?, ?, ?)
+            """, (cs, cf, cl, pw, cc, cat))
             conn.commit()
         except sqlite3.IntegrityError:
             messagebox.showerror("Error", "Student ID already exists!")
@@ -1078,7 +1315,7 @@ def createaccount():
         back()
 
 buttons_row = Frame(regframe,bg='white')
-buttons_row.grid(row=10,column=0,columnspan=2,sticky=EW,pady=(30,0))
+buttons_row.grid(row=12,column=0,columnspan=2,sticky=EW,pady=(16,0))
 buttons_row.grid_columnconfigure(0,weight=1)
 buttons_row.grid_columnconfigure(1,weight=2)
 
@@ -1302,7 +1539,7 @@ remove_staff_btn.grid(row=1,column=5)
 admin_queue_page.grid_rowconfigure(2,weight=1)
 Label(admin_queue_page,text='All queues',font=('poppins',15,'bold'),bg='white').grid(row=0,column=0,sticky=W,pady=(0,10))
 
-aq_columns = ("Entry #","Staff","Name","Student ID","Payment for","Amount","Method","Status","Created at","Paid at")
+aq_columns = ("Entry #","Staff","Name","Student ID","Payment for","Amount","Status","Created at","Paid at")
 aq_table = Treeview(admin_queue_page,columns=aq_columns,show='headings',height=10)
 aq_table.grid(row=2,column=0,sticky=NSEW)
 
@@ -1313,7 +1550,6 @@ aq_column_settings = [
     ("Student ID",180,CENTER),
     ("Payment for",280,W),
     ("Amount",110,E),
-    ("Method",90,CENTER),
     ("Status",90,CENTER),
     ("Created at",190,CENTER),
     ("Paid at",190,CENTER),]
@@ -1331,7 +1567,7 @@ def load_all_queue():
     for row in aq_table.get_children():
         aq_table.delete(row)
     query = """SELECT id, COALESCE(staff,'-'), name, student_id,
-                  payment_for, amount, payment_method, status,
+                  payment_for, amount, status,
                   datetime(created_at,'localtime'), datetime(paid_at,'localtime')
            FROM queue WHERE 1=1"""
 
@@ -1346,9 +1582,6 @@ def load_all_queue():
     if aq_status.get() != "All":
         query += " AND status=?"
         params.append(aq_status.get())
-    if aq_method.get() != "All":
-        query += " AND payment_method=?"
-        params.append(aq_method.get())
     if aq_date.get().strip():
         query += " AND date(created_at,'localtime') = ?"
         params.append(aq_date.get().strip())
@@ -1359,14 +1592,13 @@ def load_all_queue():
     rows = cur.fetchall()
     conn.close()
     for r in rows:
-        tag = 'paid' if r[7] == 'Paid' else ''
-        aq_table.insert("",END,values=(r[0],r[1],r[2],r[3],r[4],f"₱{r[5]:,.2f}",r[6],r[7],fmt_time(r[8]),fmt_time(r[9])),tags=(tag,))
+        tag = 'paid' if r[6] == 'Paid' else ''
+        aq_table.insert("",END,values=(r[0],r[1],r[2],r[3],r[4],f"₱{r[5]:,.2f}",r[6],fmt_time(r[7]),fmt_time(r[8])),tags=(tag,))
 
 def clear_aq_filters():
     aq_search.delete(0,END)
     aq_staff.set("All")
     aq_status.set("All")
-    aq_method.set("All")
     aq_date.delete(0,END)
     load_all_queue()
 
@@ -1385,24 +1617,18 @@ aq_staff.grid(row=1,column=1,padx=(0,14))
 aq_staff.bind("<<ComboboxSelected>>",lambda e: load_all_queue())
 
 Label(aq_bar,text='Status',font=('poppins',10),fg='#4d6361',bg='white').grid(row=0,column=2,sticky=W)
-aq_status = Combobox(aq_bar,values=["All","Waiting","Paid"],font=('poppins',10),width=10,state='readonly')
+aq_status = Combobox(aq_bar,values=["All","Waiting","Paid","Cancelled"],font=('poppins',10),width=10,state='readonly')
 aq_status.set("All")
 aq_status.grid(row=1,column=2,padx=(0,14))
 aq_status.bind("<<ComboboxSelected>>",lambda e: load_all_queue())
 
-Label(aq_bar,text='Method',font=('poppins',10),fg='#4d6361',bg='white').grid(row=0,column=3,sticky=W)
-aq_method = Combobox(aq_bar,values=["All","Cash","Online"],font=('poppins',10),width=10,state='readonly')
-aq_method.set("All")
-aq_method.grid(row=1,column=3,padx=(0,14))
-aq_method.bind("<<ComboboxSelected>>",lambda e: load_all_queue())
-
-Label(aq_bar,text='Date (YYYY-MM-DD)',font=('poppins',10),fg='#4d6361',bg='white').grid(row=0,column=4,sticky=W)
+Label(aq_bar,text='Date (YYYY-MM-DD)',font=('poppins',10),fg='#4d6361',bg='white').grid(row=0,column=3,sticky=W)
 aq_date = DateEntry(aq_bar,font=('poppins',10),width=14,date_pattern='yyyy-mm-dd')
 aq_date.delete(0,END)   # start empty, so all dates show
-aq_date.grid(row=1,column=4,padx=(0,14),ipady=3)
+aq_date.grid(row=1,column=3,padx=(0,14),ipady=3)
 aq_date.bind("<<DateEntrySelected>>",lambda e: load_all_queue())
 aq_clear_btn = Button(aq_bar,text='Clear',font=('poppins',10,'bold'),bg='white',fg='black',activebackground='white',relief=FLAT,padx=16,pady=4,cursor='hand2',command=clear_aq_filters)
-aq_clear_btn.grid(row=1,column=5)
+aq_clear_btn.grid(row=1,column=4)
 
 #---------------------------------------------------------------------------------------------------------------------------------
 # 3) COURSES & FEES
@@ -1595,10 +1821,10 @@ save_fee_btn.grid(row=0,column=3)
 admin_students_page.grid_rowconfigure(2,weight=1)
 Label(admin_students_page,text='Student records',font=('poppins',15,'bold'),bg='white').grid(row=0,column=0,sticky=W,pady=(0,10))
 
-students_table = Treeview(admin_students_page,columns=("Student ID","First name","Last name","Course"),show='headings',height=10)
+students_table = Treeview(admin_students_page,columns=("Student ID","First name","Last name","Course","Category"),show='headings',height=10)
 students_table.grid(row=2,column=0,sticky=NSEW)
 
-students_column_settings = [("Student ID",190,CENTER),("First name",200,W),("Last name",200,W),("Course",400,W)]
+students_column_settings = [("Student ID",190,CENTER),("First name",200,W),("Last name",200,W),("Course",400,W),("Category",100,CENTER)]
 for col_name, col_width, col_anchor in students_column_settings:
     students_table.heading(col_name, text=col_name)
     students_table.column(col_name, width=col_width, anchor=col_anchor)
@@ -1610,7 +1836,7 @@ students_scrollbar.grid(row=2,column=1,sticky=NS)
 def load_students():
     for row in students_table.get_children():
         students_table.delete(row)
-    query = "SELECT student_id, first_name, last_name, course FROM students"
+    query = "SELECT student_id, first_name, last_name, course, COALESCE(category,'Regular') FROM students"
     params = []
     search = st_search.get().strip()
     if search:
@@ -1629,6 +1855,7 @@ def clear_student_form():
     st_first.delete(0,END)
     st_last.delete(0,END)
     st_course.set('')
+    st_category.set('Regular')
 
 def on_student_select(event):
     selected = students_table.selection()
@@ -1639,6 +1866,7 @@ def on_student_select(event):
     st_first.insert(0,values[1])
     st_last.insert(0,values[2])
     st_course.set(values[3])
+    st_category.set(values[4])
 
 def save_student_changes():
     selected = students_table.selection()
@@ -1649,6 +1877,7 @@ def save_student_changes():
     first = st_first.get().strip()
     last = st_last.get().strip()
     course = st_course.get()
+    category = st_category.get() or "Regular"
     if not first or not last or not course:
         messagebox.showerror("Error","Please input all needed information!")
         return
@@ -1657,11 +1886,11 @@ def save_student_changes():
         return
     conn = sqlite3.connect("fastq.db")
     cur = conn.cursor()
-    cur.execute("UPDATE students SET first_name=?, last_name=?, course=? WHERE student_id=?",(first,last,course,sid))
+    cur.execute("UPDATE students SET first_name=?, last_name=?, course=?, category=? WHERE student_id=?",(first,last,course,category,sid))
     cur.execute("UPDATE queue SET name=? WHERE student_id=?",(f"{first} {last}",sid))   # fix the name on old queue entries too
     conn.commit()
     conn.close()
-    log_action(current_staff, current_role, "EDIT STUDENT", f"{sid}: {first} {last}, {course}")
+    log_action(current_staff, current_role, "EDIT STUDENT", f"{sid}: {first} {last}, {course}, {category}")
     load_students()
     load_queue()
     if shown_student_id == sid:
@@ -1688,6 +1917,28 @@ def delete_student():
     load_students()
     clear_student_form()
 
+def reset_student_password():
+    selected = students_table.selection()
+    if not selected:
+        messagebox.showerror("Error","Pick a student from the list first.")
+        return
+    sid = str(students_table.item(selected[0])['values'][0])
+    pw = st_new_pw.get()
+    if " " in pw or len(pw) < 8 or not any(ch.isupper() for ch in pw) or not any(ch.islower() for ch in pw) or not any(ch.isdigit() for ch in pw):
+        messagebox.showerror("Error","Password: 8+ characters, no spaces, with an uppercase, a lowercase, and a number.")
+        return
+    if not messagebox.askyesno("Change password",f"Change the password of student {sid}?"):
+        return
+    conn = sqlite3.connect("fastq.db")
+    cur = conn.cursor()
+    cur.execute("UPDATE students SET password=? WHERE student_id=?",(pw,sid))
+    conn.commit()
+    conn.close()
+    log_action(current_staff, current_role, "RESET STUDENT PASSWORD", f"For {sid}")
+    st_new_pw.delete(0,END)
+    messagebox.showinfo("Done",f"Password for student {sid} was changed.")
+
+
 students_table.bind("<<TreeviewSelect>>",on_student_select)
 
 st_bar = Frame(admin_students_page,bg='white')
@@ -1708,12 +1959,24 @@ st_last.grid(row=1,column=1,padx=(0,14),ipady=3)
 Label(st_form,text='Course',font=('poppins',10),fg='#4d6361',bg='white').grid(row=0,column=2,sticky=W)
 st_course = Combobox(st_form,values=course_list,font=('poppins',10),width=40,state='readonly')
 st_course.grid(row=1,column=2,padx=(0,14))
+Label(st_form,text='Category',font=('poppins',10),fg='#4d6361',bg='white').grid(row=0,column=3,sticky=W)
+st_category = Combobox(st_form,values=["Regular","PWD"],font=('poppins',10),width=9,state='readonly')
+st_category.set("Regular")
+st_category.grid(row=1,column=3,padx=(0,14))
 
 save_student_btn = Button(st_form,text='Save changes',font=('poppins',10,'bold'),bg='#f59a23',fg='black',activebackground='#f59a23',relief=FLAT,padx=16,pady=4,cursor='hand2',command=save_student_changes)
-save_student_btn.grid(row=1,column=3,padx=(0,8))
+save_student_btn.grid(row=1,column=4,padx=(0,8))
 
 delete_student_btn = Button(st_form,text='Delete',font=('poppins',10,'bold'),bg='#c0392b',fg='white',activebackground='#c0392b',relief=FLAT,padx=16,pady=4,cursor='hand2',command=delete_student)
-delete_student_btn.grid(row=1,column=4)
+delete_student_btn.grid(row=1,column=5)
+
+Label(st_form,text='New password (for the selected student)',font=('poppins',10),fg='#4d6361',bg='white').grid(row=2,column=0,columnspan=2,sticky=W,pady=(14,0))
+st_new_pw = Entry(st_form,font=('poppins',10),width=24)
+st_new_pw.grid(row=3,column=0,columnspan=2,sticky=W,ipady=3)
+
+reset_student_pw_btn = Button(st_form,text='Reset password',font=('poppins',10,'bold'),bg='#e8eceb',fg='black',activebackground='#e8eceb',relief=FLAT,padx=16,pady=4,cursor='hand2',command=reset_student_password)
+reset_student_pw_btn.grid(row=3,column=2,sticky=W)
+
 
 #---------------------------------------------------------------------------------------------------------------------------------
 # 5) ACTIVITY LOG (view only, nobody can edit or delete)
@@ -1827,18 +2090,21 @@ sheader = Frame(student_dashboard_frame,bg='#203c3c')
 sheader.grid(row=0,column=0,sticky=EW)
 sheader.grid_columnconfigure(1,weight=1)
 Label(sheader,text='FastQ',font=('poppins',18,'bold'),fg='white',bg='#203c3c',image=User_icon,compound='left',padx=10).grid(row=0,column=0,padx=(30,0),pady=10)
-student_welcome = Label(sheader,text='Welcome',font=('poppins',10),fg='white',bg='#203c3c')
+student_welcome = Label(sheader,text='Welcome',font=('poppins',10,'bold'),fg='white',bg='#203c3c')
 student_welcome.grid(row=0,column=2,padx=(0,25))
 Button(sheader,text='Log out',font=('poppins',10,'bold'),fg='black',bg='#f59a23',activebackground='#e08a15',relief=FLAT,padx=20,command=student_logout).grid(row=0,column=3,padx=(0,30))
 
 sbody = Frame(student_dashboard_frame,bg='#f2f5f4')
 sbody.grid(row=1,column=0,sticky=NSEW)
 sbody.grid_columnconfigure(0,weight=1)
-sbody.grid_rowconfigure(1,weight=1)
+sbody.grid_rowconfigure(2,weight=1)
+
+student_now_serving = make_now_serving(sbody, staff=False)
+student_now_serving.grid(row=0,column=0,sticky=EW,padx=32,pady=(24,0))
 
 # ---------- New payment form ----------
 sp_frame = Frame(sbody,bg='white',padx=24,pady=20)
-sp_frame.grid(row=0,column=0,sticky=EW,padx=32,pady=(24,0))
+sp_frame.grid(row=1,column=0,sticky=EW,padx=32,pady=(20,0))
 sp_frame.grid_columnconfigure(1,weight=1)
 Label(sp_frame,text="New payment",font=("poppins",15,'bold'),bg='white').grid(row=0,column=0,sticky=W,pady=(0,14))
 
@@ -1918,6 +2184,18 @@ def sp_toggle(item):
             sp_amounts[item].delete(0,END)
             sp_amounts[item].insert(0,f"{(get_payable(current_student, course) or 0):.2f}")
             sp_amounts[item].config(state=DISABLED)   # auto amount, can't edit
+        elif item == "Books":
+            course = get_student_info(current_student)[2]
+            price = min(get_books_price(course), get_payable(current_student, course) or 0)
+            sp_amounts[item].delete(0,END)
+            sp_amounts[item].insert(0,f"{price:.2f}")
+            sp_amounts[item].config(state=DISABLED)   # auto amount, can't edit
+        elif item == "Uniforms":
+            course = get_student_info(current_student)[2]
+            price = min(get_uniform_price(course), get_payable(current_student, course) or 0)
+            sp_amounts[item].delete(0,END)
+            sp_amounts[item].insert(0,f"{price:.2f}")
+            sp_amounts[item].config(state=DISABLED)   # auto amount, can't edit
         else:
             sp_amounts[item].focus()
     else:
@@ -1964,7 +2242,7 @@ def get_payable(student_id, course):
         return None
     conn = sqlite3.connect("fastq.db")
     cur = conn.cursor()
-    cur.execute("SELECT COALESCE(SUM(amount),0) FROM queue WHERE student_id=? AND status='Waiting'", (student_id,))
+    cur.execute("SELECT COALESCE(SUM(amount - COALESCE(extra,0)),0) FROM queue WHERE student_id=? AND status='Waiting'", (student_id,))
     waiting = cur.fetchone()[0]
     conn.close()
     return max(0, bal - waiting)
@@ -2038,11 +2316,15 @@ def submit_payment():
 
     chosen = []
     total = 0
+    extra = 0
     for item in sp_items:
         if sp_vars[item].get():
             amt = sp_amounts[item].get().replace(",","").strip()
             if not amt or not amt.replace(".","",1).isdigit() or float(amt) <= 0:
                 messagebox.showerror("Error", f"Please input a valid amount for {item}.")
+                return
+            if item in ("Registrar Transactions", "Others") and float(amt) > 100000:
+                messagebox.showerror("Error", f"The amount for {item} cannot exceed ₱100,000.00.")
                 return
             label = f"Installment {sp_next_inst}" if item == "Installment" else item
             if item == "Others":
@@ -2052,20 +2334,22 @@ def submit_payment():
                     return
                 label = f"Others: {what}"
             chosen.append(label)
+            if item in ("Registrar Transactions","Others"):
+                extra += float(amt)
             total += float(amt)
 
     if not chosen:
         messagebox.showerror("Error", "Please tick at least one purpose of payment.")
         return
-    if total > limit:
+    if total - extra > limit:
         messagebox.showerror("Error", f"Your total is more than your balance.\nYou can pay up to ₱{limit:,.2f}.")
         return
 
     name = f"{info[0]} {info[1]}"
     conn = sqlite3.connect("fastq.db")
     cur = conn.cursor()
-    cur.execute("""INSERT INTO queue (student_id, name, payment_for, amount, payment_method)
-                VALUES (?, ?, ?, ?, 'Cash')""", (current_student, name, ", ".join(chosen), total))
+    cur.execute("""INSERT INTO queue (student_id, name, payment_for, amount, extra)
+                VALUES (?, ?, ?, ?, ?)""", (current_student, name, ", ".join(chosen), total, extra))
     conn.commit()
     queue_number = cur.lastrowid
     conn.close()
@@ -2079,7 +2363,7 @@ Button(sp_total_card,text="Get queue number",command=submit_payment,bg='#f59a23'
 
 # ---------- My payments list ----------
 sp_list_card = Frame(sbody,bg='white',padx=24,pady=18)
-sp_list_card.grid(row=1,column=0,sticky=NSEW,padx=32,pady=(20,28))
+sp_list_card.grid(row=2,column=0,sticky=NSEW,padx=32,pady=(20,28))
 sp_list_card.grid_rowconfigure(1,weight=1)
 sp_list_card.grid_columnconfigure(0,weight=1)
 Label(sp_list_card,text='My payments',font=('poppins',15,'bold'),bg='white').grid(row=0,column=0,sticky=W,pady=(0,12))
@@ -2096,5 +2380,31 @@ my_list.bind("<Double-1>", lambda e: view_my_receipt())
 
 load_queue()
 
+# ---- make the student page fit the screen ----
+for w in ns_widgets:
+    w["number"].config(font=('poppins',24,'bold'))
+    w["window_lbl"].config(font=('poppins',16,'bold'))
+    w["window_lbl"].master.config(pady=4)
+    w["number"].master.config(pady=8)
+student_now_serving.grid_configure(pady=(12,0))
+sp_frame.config(pady=10)
+sp_frame.grid_configure(pady=(10,0))
+sp_frame.grid_slaves(row=0,column=0)[0].grid_configure(pady=(0,6))
+sp_left.config(pady=8)
+sp_total_card.config(pady=8)
+for cell in sp_cells.values():
+    for child in cell.winfo_children():
+        if isinstance(child, Checkbutton):
+            child.grid_configure(pady=2)
+sp_list_card.config(pady=8)
+sp_list_card.grid_configure(pady=(10,10))
+my_list.config(height=3)
+
+
+def poll_now_serving():
+    refresh_now_serving()
+    window.after(3000, poll_now_serving)
+
+poll_now_serving()
 
 window.mainloop()
